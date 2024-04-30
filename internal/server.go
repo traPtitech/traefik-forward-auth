@@ -149,6 +149,7 @@ func (s *Server) authHandler(providerName, rule string, soft bool) http.HandlerF
 	}
 
 	forceLogin := s.LoginHandler(providerName)
+	forceLogout := s.LogoutHandler()
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Logging setup
@@ -168,13 +169,20 @@ func (s *Server) authHandler(providerName, rule string, soft bool) http.HandlerF
 			}
 		}
 
-		// Explicit login route (config.Path+"/login") on soft-auth
+		// Explicit login route on each host (only makes sense for "soft-auth" mode)
 		if soft {
 			isForceLogin := strings.HasPrefix(r.Header.Get("X-Forwarded-Uri"), config.Path+"/login")
 			if isForceLogin {
 				forceLogin(w, r)
 				return
 			}
+		}
+
+		// Explicit logout route on each host
+		isForceLogout := strings.HasPrefix(r.Header.Get("X-Forwarded-Uri"), config.Path+"/logout")
+		if isForceLogout {
+			forceLogout(w, r)
+			return
 		}
 
 		// Get user from cookie
