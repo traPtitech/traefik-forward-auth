@@ -386,11 +386,11 @@ func TestServerRouteHeaders(t *testing.T) {
 	config.Rules = map[string]*Rule{
 		"1": {
 			Action: "allow",
-			Rule:   "Headers(`X-Test`, `test123`)",
+			Rule:   "Header(`X-Test`, `test123`)",
 		},
 		"2": {
 			Action: "allow",
-			Rule:   "HeadersRegexp(`X-Test`, `test(456|789)`)",
+			Rule:   "HeaderRegexp(`X-Test`, `test(456|789)`)",
 		},
 	}
 
@@ -423,7 +423,7 @@ func TestServerRouteHost(t *testing.T) {
 		},
 		"2": {
 			Action: "allow",
-			Rule:   "HostRegexp(`sub{num:[0-9]}.example.com`)",
+			Rule:   "HostRegexp(`^sub[0-9].example.com$`)",
 		},
 	}
 
@@ -504,7 +504,7 @@ func TestServerRouteQuery(t *testing.T) {
 	config.Rules = map[string]*Rule{
 		"1": {
 			Action: "allow",
-			Rule:   "Query(`q=test123`)",
+			Rule:   "Query(`q`, `test123`)",
 		},
 	}
 
@@ -608,6 +608,7 @@ func newDefaultHttpRequest(uri string) *http.Request {
 func newHTTPRequest(method, target string) *http.Request {
 	u, _ := url.Parse(target)
 	r := httptest.NewRequest(method, target, nil)
+	// https://doc.traefik.io/traefik/v3.0/middlewares/http/forwardauth/
 	r.Header.Add("X-Forwarded-Method", method)
 	r.Header.Add("X-Forwarded-Proto", u.Scheme)
 	r.Header.Add("X-Forwarded-Host", u.Host)

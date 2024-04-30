@@ -1,5 +1,5 @@
 # Start by building the application.
-FROM --platform=$BUILDPLATFORM golang:1.20 as build
+FROM --platform=$BUILDPLATFORM golang:1.22 as build
 
 WORKDIR /usr/src/traefik-forward-auth
 ENV CGO_ENABLED 0

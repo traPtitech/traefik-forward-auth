@@ -80,7 +80,7 @@ docker-compose.yml:
 ```yaml
 services:
   traefik:
-    image: traefik:v2.9
+    image: traefik:v3.0
     command: --providers.docker
     ports:
       - "8085:80"
@@ -185,13 +185,6 @@ Application Options:
       --probe-token=                                        Static probe token which is always passed [$PROBE_TOKEN]
       --probe-token-user=                                   User authenticated with static probe token (default: probe) [$PROBE_TOKEN_USER]
       --rule.<name>.<param>=                                Rule definitions, param can be: "action", "rule" or "provider"
-      --header-name=                                        DEPRECATED - Use "header-names" [$HEADER_NAME]
-      --cookie-domains=                                     DEPRECATED - Use "cookie-domain" [$COOKIE_DOMAINS]
-      --cookie-secret=                                      DEPRECATED - Use "secret" [$COOKIE_SECRET]
-      --cookie-secure=                                      DEPRECATED - Use "insecure-cookie" [$COOKIE_SECURE]
-      --client-id=                                          DEPRECATED - Use "providers.google.client-id" [$CLIENT_ID]
-      --client-secret=                                      DEPRECATED - Use "providers.google.client-id" [$CLIENT_SECRET]
-      --prompt=                                             DEPRECATED - Use "providers.google.prompt" [$PROMPT]
       --trusted-ip-address=                                 List of trusted IP addresses or IP networks (in CIDR notation) that are considered authenticated [$TRUSTED_IP_ADDRESS]
 
 Google Provider:
@@ -354,22 +347,23 @@ All options can be supplied in any of the following ways, in the following prece
        - `provider` - same usage as [`default-provider`](#default-provider), supported values:
            - `google`
            - `oidc`
-       - `rule` - a rule to match a request, this uses traefik's v2 rule parser for which you can find the documentation here: https://docs.traefik.io/v2.0/routing/routers/#rule, supported values are summarised here:
-           - ``Headers(`key`, `value`)``
-           - ``HeadersRegexp(`key`, `regexp`)``
-           - ``Host(`example.com`, ...)``
-           - ``HostRegexp(`example.com`, `{subdomain:[a-z]+}.example.com`, ...)``
-           - ``Method(methods, ...)``
-           - ``Path(`path`, `/articles/{category}/{id:[0-9]+}`, ...)``
-           - ``PathPrefix(`/products/`, `/articles/{category}/{id:[0-9]+}`)``
-           - ``Query(`foo=bar`, `bar=baz`)``
+       - `rule` - a rule to match a request, this uses traefik's v3 rule parser for which you can find the documentation here: https://docs.traefik.io/v3.0/routing/routers/#rule, supported values are summarised here:
+           - ``Header(`key`, `value`)``
+           - ``HeaderRegexp(`key`, `regexp`)``
+           - ``Host(`example.com`)``
+           - ``HostRegexp(`^[a-z]+.example.com`)``
+           - ``Method(`OPTIONS`)``
+           - ``Path(`path`)``
+           - ``PathRegexp(`^/articles/{category}/[0-9]+$`)``
+           - ``PathPrefix(`/products/`)``
+           - ``Query(`foo=bar`)``
        - `whitelist` - optional, same usage as whitelist`](#whitelist)
 
    For example:
    ```
    # Allow requests that being with `/api/public` and contain the `Content-Type` header with a value of `application/json`
    rule.1.action = allow
-   rule.1.rule = PathPrefix(`/api/public`) && Headers(`Content-Type`, `application/json`)
+   rule.1.rule = PathPrefix(`/api/public`) && Header(`Content-Type`, `application/json`)
 
    # Allow requests that have the exact path `/public`
    rule.two.action = allow

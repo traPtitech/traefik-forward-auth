@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"os"
 	"regexp"
@@ -54,15 +53,6 @@ type Config struct {
 	Secret   []byte `json:"-"`
 	Lifetime time.Duration
 
-	// Legacy
-	HeaderName          string        `long:"header-name" env:"HEADER_NAME" default:"" description:"DEPRECATED - Use \"header-names\""`
-	CookieDomainsLegacy CookieDomains `long:"cookie-domains" env:"COOKIE_DOMAINS" description:"DEPRECATED - Use \"cookie-domain\""`
-	CookieSecretLegacy  string        `long:"cookie-secret" env:"COOKIE_SECRET" description:"DEPRECATED - Use \"secret\""  json:"-"`
-	CookieSecureLegacy  string        `long:"cookie-secure" env:"COOKIE_SECURE" description:"DEPRECATED - Use \"insecure-cookie\""`
-	ClientIdLegacy      string        `long:"client-id" env:"CLIENT_ID" description:"DEPRECATED - Use \"providers.google.client-id\""`
-	ClientSecretLegacy  string        `long:"client-secret" env:"CLIENT_SECRET" description:"DEPRECATED - Use \"providers.google.client-id\""  json:"-"`
-	PromptLegacy        string        `long:"prompt" env:"PROMPT" description:"DEPRECATED - Use \"providers.google.prompt\""`
-
 	TrustedIPAddresses []string `long:"trusted-ip-address" env:"TRUSTED_IP_ADDRESS" env-delim:"," description:"List of trusted IP addresses or IP networks (in CIDR notation) that are considered authenticated"`
 	trustedIPNetworks  []*net.IPNet
 }
@@ -103,37 +93,6 @@ func NewConfig(args []string) (*Config, error) {
 		if rule.Provider == "" {
 			rule.Provider = c.DefaultProvider
 		}
-	}
-
-	// Backwards compatability
-	if c.HeaderName != "" {
-		c.HeaderNames = append(c.HeaderNames, c.HeaderName)
-	}
-	if c.CookieSecretLegacy != "" && c.SecretString == "" {
-		fmt.Println("cookie-secret config option is deprecated, please use secret")
-		c.SecretString = c.CookieSecretLegacy
-	}
-	if c.ClientIdLegacy != "" {
-		c.Providers.Google.ClientID = c.ClientIdLegacy
-	}
-	if c.ClientSecretLegacy != "" {
-		c.Providers.Google.ClientSecret = c.ClientSecretLegacy
-	}
-	if c.PromptLegacy != "" {
-		fmt.Println("prompt config option is deprecated, please use providers.google.prompt")
-		c.Providers.Google.Prompt = c.PromptLegacy
-	}
-	if c.CookieSecureLegacy != "" {
-		fmt.Println("cookie-secure config option is deprecated, please use insecure-cookie")
-		secure, err := strconv.ParseBool(c.CookieSecureLegacy)
-		if err != nil {
-			return c, err
-		}
-		c.InsecureCookie = !secure
-	}
-	if len(c.CookieDomainsLegacy) > 0 {
-		fmt.Println("cookie-domains config option is deprecated, please use cookie-domain")
-		c.CookieDomains = append(c.CookieDomains, c.CookieDomainsLegacy...)
 	}
 
 	// Transformations
@@ -287,7 +246,7 @@ func handleFlagError(err error) error {
 var legacyFileFormat = regexp.MustCompile(`(?m)^([a-z-]+) (.*)$`)
 
 func convertLegacyToIni(name string) (io.Reader, error) {
-	b, err := ioutil.ReadFile(name)
+	b, err := os.ReadFile(name)
 	if err != nil {
 		return nil, err
 	}
@@ -411,12 +370,6 @@ func NewRule() *Rule {
 	return &Rule{
 		Action: "auth",
 	}
-}
-
-func (r *Rule) formattedRule() string {
-	// Traefik implements their own "Host" matcher and then offers "HostRegexp"
-	// to invoke the mux "Host" matcher. This ensures the mux version is used
-	return strings.ReplaceAll(r.Rule, "Host(", "HostRegexp(")
 }
 
 // Validate validates a rule

@@ -2,12 +2,14 @@ package tfa
 
 import (
 	"fmt"
+	"github.com/traefik/traefik/v3/pkg/middlewares/requestdecorator"
 	"net/http"
 	"net/url"
 	"strings"
 
+	"github.com/samber/lo"
 	"github.com/sirupsen/logrus"
-	mux "github.com/traefik/traefik/v2/pkg/muxer/http"
+	mux "github.com/traefik/traefik/v3/pkg/muxer/http"
 
 	"github.com/traPtitech/traefik-forward-auth/internal/provider"
 )
@@ -15,6 +17,8 @@ import (
 // Server contains router and handler methods
 type Server struct {
 	muxer *mux.Muxer
+	// reqDecorator is necessary for the Host matcher
+	reqDecorator *requestdecorator.RequestDecorator
 }
 
 // NewServer creates a new server object and builds router
@@ -36,36 +40,37 @@ func (s *Server) buildRoutes() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	s.reqDecorator = requestdecorator.New(nil)
 
 	// Let's build a router
+	const syntax = "v3"
 	for name, rule := range config.Rules {
-		matchRule := rule.formattedRule()
-		err = s.muxer.AddRoute(matchRule, 1, s.Handler(rule.Action, rule.Provider, name))
-		if err != nil {
-			panic(err) // should not occur because rule is validated beforehand
-		}
+		// err should not occur because rule is validated beforehand
+		lo.Must0(s.muxer.AddRoute(rule.Rule, syntax, 1, s.Handler(rule.Action, rule.Provider, name)))
 	}
 
 	// Add callback handler
-	s.muxer.Handle(config.Path, s.AuthCallbackHandler())
+	pathToMatcher := func(path string) string { return fmt.Sprintf("Path(`%s`)", path) }
+	lo.Must0(s.muxer.AddRoute(pathToMatcher(config.Path), syntax, 1, s.AuthCallbackHandler()))
 
 	// Add login / logout handler
-	s.muxer.Handle(config.Path+"/login", s.LoginHandler(config.DefaultProvider))
-	s.muxer.Handle(config.Path+"/logout", s.LogoutHandler())
+	lo.Must0(s.muxer.AddRoute(pathToMatcher(config.Path+"/login"), syntax, 1, s.LoginHandler(config.DefaultProvider)))
+	lo.Must0(s.muxer.AddRoute(pathToMatcher(config.Path+"/logout"), syntax, 1, s.LogoutHandler()))
 
 	// Add health check handler
-	s.muxer.Handle("/healthz", http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+	lo.Must0(s.muxer.AddRoute(pathToMatcher("/healthz"), syntax, 1, http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 		rw.WriteHeader(http.StatusOK)
-	}))
+	})))
 
 	// Add a default handler
-	s.muxer.NewRoute().Handler(s.Handler(config.DefaultAction, config.DefaultProvider, "default"))
+	s.muxer.SetDefaultHandler(s.Handler(config.DefaultAction, config.DefaultProvider, "default"))
 }
 
 // RootHandler Overwrites the request method, host and URL with those from the
 // forwarded request so it's correctly routed by mux
 func (s *Server) RootHandler(w http.ResponseWriter, r *http.Request) {
 	// Modify request
+	// https://doc.traefik.io/traefik/v3.0/middlewares/http/forwardauth/
 	r.Method = r.Header.Get("X-Forwarded-Method")
 	r.Host = r.Header.Get("X-Forwarded-Host")
 
@@ -75,7 +80,7 @@ func (s *Server) RootHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Pass to mux
-	s.muxer.ServeHTTP(w, r)
+	s.reqDecorator.ServeHTTP(w, r, s.muxer.ServeHTTP)
 }
 
 func (s *Server) Handler(action, providerName, rule string) http.HandlerFunc {
