@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-jose/go-jose/v4"
 	"github.com/stretchr/testify/assert"
-	"gopkg.in/square/go-jose.v2"
 )
 
 // Tests
