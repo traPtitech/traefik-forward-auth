@@ -62,8 +62,8 @@ func (o *OIDC) Setup() error {
 }
 
 // GetLoginURL provides the login url for the given redirect uri and state
-func (o *OIDC) GetLoginURL(redirectURI, state string, forcePrompt bool) string {
-	return o.OAuthGetLoginURL(redirectURI, state, forcePrompt)
+func (o *OIDC) GetLoginURL(redirectURI, state string, allowPrompt bool) string {
+	return o.OAuthGetLoginURL(redirectURI, state, allowPrompt)
 }
 
 // ExchangeCode exchanges the given redirect uri and code for a token

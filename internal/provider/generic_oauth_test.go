@@ -55,7 +55,7 @@ func TestGenericOAuthGetLoginURL(t *testing.T) {
 	}
 
 	// Check url
-	uri, err := url.Parse(p.GetLoginURL("http://example.com/_oauth", "state", false))
+	uri, err := url.Parse(p.GetLoginURL("http://example.com/_oauth", "state", true))
 	assert.Nil(err)
 	assert.Equal("https", uri.Scheme)
 	assert.Equal("provider.com", uri.Host)

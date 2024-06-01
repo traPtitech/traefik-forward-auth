@@ -20,7 +20,7 @@ type Providers struct {
 // Provider is used to authenticate users
 type Provider interface {
 	Name() string
-	GetLoginURL(redirectURI, state string, forcePrompt bool) string
+	GetLoginURL(redirectURI, state string, allowPrompt bool) string
 	ExchangeCode(redirectURI, code string) (string, error)
 	GetUser(token, UserPath string) (string, error)
 	Setup() error
@@ -62,11 +62,11 @@ func (p *OAuthProvider) ConfigCopy(redirectURI string) oauth2.Config {
 }
 
 // OAuthGetLoginURL provides a base "GetLoginURL" for proiders using OAauth2
-func (p *OAuthProvider) OAuthGetLoginURL(redirectURI, state string, forcePrompt bool) string {
+func (p *OAuthProvider) OAuthGetLoginURL(redirectURI, state string, allowPrompt bool) string {
 	config := p.ConfigCopy(redirectURI)
 
 	var options []oauth2.AuthCodeOption
-	if p.Prompt != "" && !forcePrompt {
+	if p.Prompt != "" && allowPrompt {
 		options = append(options, oauth2.SetAuthURLParam("prompt", p.Prompt))
 	}
 	if p.Resource != "" {
