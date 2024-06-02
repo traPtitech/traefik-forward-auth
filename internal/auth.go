@@ -1,15 +1,11 @@
 package tfa
 
 import (
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -40,44 +36,11 @@ func checkProbeToken(cookie string) (user string, ok bool) {
 // ValidateCookie verifies that a cookie matches the expected format of:
 // Cookie = hash(secret, cookie domain, user, expires)|expires|user
 func ValidateCookie(r *http.Request, c *http.Cookie) (string, error) {
+	// TODO: remove "probe token" mechanism and implement manual signing of tokens
 	if user, ok := checkProbeToken(c.Value); ok {
 		return user, nil
 	}
-
-	parts := strings.Split(c.Value, "|")
-
-	if len(parts) != 3 {
-		return "", errors.New("Invalid cookie format")
-	}
-
-	mac, err := base64.URLEncoding.DecodeString(parts[0])
-	if err != nil {
-		return "", errors.New("Unable to decode cookie mac")
-	}
-
-	expectedSignature := cookieSignature(r, parts[2], parts[1])
-	expected, err := base64.URLEncoding.DecodeString(expectedSignature)
-	if err != nil {
-		return "", errors.New("Unable to generate mac")
-	}
-
-	// Valid token?
-	if !hmac.Equal(mac, expected) {
-		return "", ErrInvalidSignature
-	}
-
-	expires, err := strconv.ParseInt(parts[1], 10, 64)
-	if err != nil {
-		return "", errors.New("Unable to parse cookie expiry")
-	}
-
-	// Has it expired?
-	if time.Unix(expires, 0).Before(time.Now()) {
-		return "", ErrCookieExpired
-	}
-
-	// Looks valid
-	return parts[2], nil
+	return verifyToken(cookieDomain(r.Host), c.Value)
 }
 
 // ValidateUser checks if the given user matches either a whitelisted
@@ -257,14 +220,13 @@ func useAuthDomain(r *http.Request) (bool, string) {
 // MakeCookie creates an auth cookie
 func MakeCookie(r *http.Request, user string) *http.Cookie {
 	expires := cookieExpiry()
-	mac := cookieSignature(r, user, fmt.Sprintf("%d", expires.Unix()))
-	value := fmt.Sprintf("%s|%d|%s", mac, expires.Unix(), user)
+	value := token(cookieDomain(r.Host), user, expires.Unix())
 
 	return &http.Cookie{
 		Name:     config.CookieName,
 		Value:    value,
 		Path:     "/",
-		Domain:   cookieDomain(r),
+		Domain:   cookieDomain(r.Host),
 		HttpOnly: true,
 		Secure:   !config.InsecureCookie,
 		Expires:  expires,
@@ -277,7 +239,7 @@ func ClearCookie(r *http.Request) *http.Cookie {
 		Name:     config.CookieName,
 		Value:    "",
 		Path:     "/",
-		Domain:   cookieDomain(r),
+		Domain:   cookieDomain(r.Host),
 		HttpOnly: true,
 		Secure:   !config.InsecureCookie,
 		Expires:  time.Now().Local().Add(time.Hour * -1),
@@ -371,9 +333,9 @@ func Nonce() (error, string) {
 }
 
 // Cookie domain
-func cookieDomain(r *http.Request) string {
+func cookieDomain(requestHost string) string {
 	// Check if any of the given cookie domains matches
-	_, domain := matchCookieDomains(r.Host)
+	_, domain := matchCookieDomains(requestHost)
 	return domain
 }
 
@@ -406,12 +368,8 @@ func matchCookieDomains(domain string) (bool, string) {
 }
 
 // Create cookie hmac
-func cookieSignature(r *http.Request, email, expires string) string {
-	hash := hmac.New(sha256.New, config.Secret)
-	hash.Write([]byte(cookieDomain(r)))
-	hash.Write([]byte(email))
-	hash.Write([]byte(expires))
-	return base64.URLEncoding.EncodeToString(hash.Sum(nil))
+func cookieSignature(requestHost, user, expires string) string {
+	return signature(cookieDomain(requestHost), user, expires)
 }
 
 // Get cookie expiry
