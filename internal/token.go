@@ -35,18 +35,18 @@ func verifyToken(token string) (string, error) {
 	parts := strings.Split(token, "|")
 
 	if len(parts) != 3 {
-		return "", errors.New("Invalid cookie format")
+		return "", errors.New("invalid cookie format")
 	}
 
 	mac, err := base64.URLEncoding.DecodeString(parts[0])
 	if err != nil {
-		return "", errors.New("Unable to decode cookie mac")
+		return "", errors.New("unable to decode cookie mac")
 	}
 
 	expectedSignature := signature(parts[2], parts[1])
 	expected, err := base64.URLEncoding.DecodeString(expectedSignature)
 	if err != nil {
-		return "", errors.New("Unable to generate mac")
+		return "", errors.New("unable to generate mac")
 	}
 
 	// Valid token?
@@ -56,7 +56,7 @@ func verifyToken(token string) (string, error) {
 
 	expires, err := strconv.ParseInt(parts[1], 10, 64)
 	if err != nil {
-		return "", errors.New("Unable to parse cookie expiry")
+		return "", errors.New("unable to parse cookie expiry")
 	}
 
 	// Has it expired?

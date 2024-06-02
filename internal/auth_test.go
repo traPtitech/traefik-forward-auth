@@ -226,7 +226,7 @@ func TestAuthValidateRedirect(t *testing.T) {
 		return r
 	}
 
-	errStr := "Redirect host does not match request host (must match when not using auth host)"
+	errStr := "redirect host does not match request host (must match when not using auth host)"
 
 	_, err := ValidateRedirect(
 		newRedirectRequest("http://app.example.com/_oauth?state=123"),
@@ -263,7 +263,7 @@ func TestAuthValidateRedirect(t *testing.T) {
 	//
 	config.AuthHost = "auth.example.com"
 	config.CookieDomains = []CookieDomain{*NewCookieDomain("example.com")}
-	errStr = "Redirect host does not match any expected hosts (should match cookie domain when using auth host)"
+	errStr = "redirect host does not match any expected hosts (should match cookie domain when using auth host)"
 
 	_, err = ValidateRedirect(
 		newRedirectRequest("http://app.example.com/_oauth?state=123"),
@@ -435,13 +435,13 @@ func TestAuthValidateCSRFCookie(t *testing.T) {
 	valid, _, _, err := ValidateCSRFCookie(c, state)
 	assert.False(valid)
 	if assert.Error(err) {
-		assert.Equal("Invalid CSRF cookie value", err.Error())
+		assert.Equal("invalid CSRF cookie value", err.Error())
 	}
 	c.Value = "123456789012345678901234567890123"
 	valid, _, _, err = ValidateCSRFCookie(c, state)
 	assert.False(valid)
 	if assert.Error(err) {
-		assert.Equal("Invalid CSRF cookie value", err.Error())
+		assert.Equal("invalid CSRF cookie value", err.Error())
 	}
 
 	// Should require provider
@@ -450,7 +450,7 @@ func TestAuthValidateCSRFCookie(t *testing.T) {
 	valid, _, _, err = ValidateCSRFCookie(c, state)
 	assert.False(valid)
 	if assert.Error(err) {
-		assert.Equal("Invalid CSRF state format", err.Error())
+		assert.Equal("invalid CSRF state format", err.Error())
 	}
 
 	// Should allow valid state
@@ -470,7 +470,7 @@ func TestValidateState(t *testing.T) {
 	state := "12345678901234567890123456789012:"
 	err := ValidateState(state)
 	if assert.Error(err) {
-		assert.Equal("Invalid CSRF state value", err.Error())
+		assert.Equal("invalid CSRF state value", err.Error())
 	}
 	// Should pass this state
 	state = "12345678901234567890123456789012:p99:url123"

@@ -15,7 +15,7 @@ import (
 // Request Validation
 
 var (
-	ErrCookieExpired = errors.New("Cookie has expired")
+	ErrCookieExpired = errors.New("cookie has expired")
 	// ErrInvalidSignature signifies one of:
 	// 1. mac signature was badly computed
 	// 2. mac signature was modified
@@ -134,11 +134,11 @@ func ValidateRedirect(r *http.Request, redirect string) (*url.URL, error) {
 	redirectURL, err := url.Parse(redirect)
 
 	if err != nil {
-		return nil, errors.New("Unable to parse redirect")
+		return nil, errors.New("unable to parse redirect")
 	}
 
 	if redirectURL.Scheme != "http" && redirectURL.Scheme != "https" {
-		return nil, errors.New("Invalid redirect URL scheme")
+		return nil, errors.New("invalid redirect URL scheme")
 	}
 
 	// If we're using an auth domain?
@@ -146,12 +146,12 @@ func ValidateRedirect(r *http.Request, redirect string) (*url.URL, error) {
 		// If we are using an auth domain, they redirect must share a common
 		// suffix with the requested redirect
 		if !strings.HasSuffix(redirectURL.Host, base) {
-			return nil, errors.New("Redirect host does not match any expected hosts (should match cookie domain when using auth host)")
+			return nil, errors.New("redirect host does not match any expected hosts (should match cookie domain when using auth host)")
 		}
 	} else {
 		// If not, we should only ever redirect to the same domain
 		if redirectURL.Host != r.Header.Get("X-Forwarded-Host") {
-			return nil, errors.New("Redirect host does not match request host (must match when not using auth host)")
+			return nil, errors.New("redirect host does not match request host (must match when not using auth host)")
 		}
 	}
 
@@ -270,7 +270,7 @@ func FindCSRFCookie(r *http.Request, state string) (c *http.Cookie, err error) {
 // ValidateCSRFCookie validates the csrf cookie against state
 func ValidateCSRFCookie(c *http.Cookie, state string) (valid bool, provider string, redirect string, err error) {
 	if len(c.Value) != 32 {
-		return false, "", "", errors.New("Invalid CSRF cookie value")
+		return false, "", "", errors.New("invalid CSRF cookie value")
 	}
 
 	// Check nonce match
@@ -282,7 +282,7 @@ func ValidateCSRFCookie(c *http.Cookie, state string) (valid bool, provider stri
 	params := state[33:]
 	split := strings.Index(params, ":")
 	if split == -1 {
-		return false, "", "", errors.New("Invalid CSRF state format")
+		return false, "", "", errors.New("invalid CSRF state format")
 	}
 
 	// Valid, return provider and redirect
@@ -297,7 +297,7 @@ func MakeState(returnUrl string, p provider.Provider, nonce string) string {
 // ValidateState checks whether the state is of right length.
 func ValidateState(state string) error {
 	if len(state) < 34 {
-		return errors.New("Invalid CSRF state value")
+		return errors.New("invalid CSRF state value")
 	}
 	return nil
 }
@@ -397,7 +397,7 @@ func (c *CookieDomain) MarshalFlag() (string, error) {
 	return c.Domain, nil
 }
 
-// CookieDomains provides legacy sypport for comma separated list of cookie domains
+// CookieDomains provides legacy support for comma separated list of cookie domains
 type CookieDomains []CookieDomain
 
 // UnmarshalFlag converts a comma separated list of cookie domains to an array

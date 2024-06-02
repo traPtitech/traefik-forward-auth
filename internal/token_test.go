@@ -14,7 +14,7 @@ func Test_verifyToken(t *testing.T) {
 
 		_, err := verifyToken("")
 		if assert.Error(err) {
-			assert.Equal("Invalid cookie format", err.Error())
+			assert.Equal("invalid cookie format", err.Error())
 		}
 	})
 
@@ -24,15 +24,15 @@ func Test_verifyToken(t *testing.T) {
 
 		_, err := verifyToken("")
 		if assert.Error(err) {
-			assert.Equal("Invalid cookie format", err.Error())
+			assert.Equal("invalid cookie format", err.Error())
 		}
 		_, err = verifyToken("1|2")
 		if assert.Error(err) {
-			assert.Equal("Invalid cookie format", err.Error())
+			assert.Equal("invalid cookie format", err.Error())
 		}
 		_, err = verifyToken("1|2|3|4")
 		if assert.Error(err) {
-			assert.Equal("Invalid cookie format", err.Error())
+			assert.Equal("invalid cookie format", err.Error())
 		}
 	})
 
@@ -55,7 +55,7 @@ func Test_verifyToken(t *testing.T) {
 
 		_, err := verifyToken(tok)
 		if assert.Error(err) {
-			assert.Equal("Cookie has expired", err.Error())
+			assert.Equal("cookie has expired", err.Error())
 		}
 	})
 

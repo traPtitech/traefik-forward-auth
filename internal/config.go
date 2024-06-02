@@ -113,11 +113,11 @@ func (c *Config) parseTrustedNetworks() error {
 	for i := range c.TrustedIPAddresses {
 		addr := c.TrustedIPAddresses[i]
 		if strings.Contains(addr, "/") {
-			_, net, err := net.ParseCIDR(addr)
+			_, network, err := net.ParseCIDR(addr)
 			if err != nil {
 				return err
 			}
-			c.trustedIPNetworks[i] = net
+			c.trustedIPNetworks[i] = network
 			continue
 		}
 
@@ -215,11 +215,17 @@ func (c *Config) parseUnknownFlag(option string, arg flags.SplitArgument, args [
 			rule.Provider = val
 		case "whitelist":
 			list := CommaSeparatedList{}
-			list.UnmarshalFlag(val)
+			err := list.UnmarshalFlag(val)
+			if err != nil {
+				return args, err
+			}
 			rule.Whitelist = list
 		case "domains":
 			list := CommaSeparatedList{}
-			list.UnmarshalFlag(val)
+			err := list.UnmarshalFlag(val)
+			if err != nil {
+				return args, err
+			}
 			rule.Domains = list
 		default:
 			return args, fmt.Errorf("invalid route param: %v", option)
@@ -232,7 +238,8 @@ func (c *Config) parseUnknownFlag(option string, arg flags.SplitArgument, args [
 }
 
 func handleFlagError(err error) error {
-	flagsErr, ok := err.(*flags.Error)
+	var flagsErr *flags.Error
+	ok := errors.As(err, &flagsErr)
 	if ok && flagsErr.Type == flags.ErrHelp {
 		// Library has just printed cli help
 		os.Exit(0)
@@ -254,7 +261,7 @@ func convertLegacyToIni(name string) (io.Reader, error) {
 
 // Validate validates a config object
 func (c *Config) Validate() {
-	// Check for show stopper errors
+	// Check for showstopper errors
 	if len(c.Secret) == 0 {
 		log.Fatal("\"secret\" option must be set")
 	}
@@ -278,7 +285,7 @@ func (c *Config) Validate() {
 	}
 }
 
-func (c Config) String() string {
+func (c *Config) String() string {
 	jsonConf, _ := json.Marshal(c)
 	return string(jsonConf)
 }
@@ -294,7 +301,7 @@ func (c *Config) GetProvider(name string) (provider.Provider, error) {
 		return &c.Providers.GenericOAuth, nil
 	}
 
-	return nil, fmt.Errorf("Unknown provider: %s", name)
+	return nil, fmt.Errorf("unknown provider: %s", name)
 }
 
 // GetConfiguredProvider returns the provider of the given name, if it has been
@@ -302,7 +309,7 @@ func (c *Config) GetProvider(name string) (provider.Provider, error) {
 func (c *Config) GetConfiguredProvider(name string) (provider.Provider, error) {
 	// Check the provider has been configured
 	if !c.providerConfigured(name) {
-		return nil, fmt.Errorf("Unconfigured provider: %s", name)
+		return nil, fmt.Errorf("unconfigured provider: %s", name)
 	}
 
 	return c.GetProvider(name)
