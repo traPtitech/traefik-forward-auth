@@ -18,7 +18,7 @@ func signature(user, expireUnixSecond string) string {
 	return base64.URLEncoding.EncodeToString(hash.Sum(nil))
 }
 
-// token signs a new token for recording this authentication.
+// SignToken signs a new token for recording this authentication.
 //
 // A token consists of three parts:
 // - Signature = HMAC256(key = secret, data = user + expireUnixSecond)
@@ -26,7 +26,7 @@ func signature(user, expireUnixSecond string) string {
 // - Username
 //
 // These parts are concatenated with a vertical bar '|' to make up a single token.
-func token(user string, expireUnixSecond int64) string {
+func SignToken(user string, expireUnixSecond int64) string {
 	mac := signature(user, fmt.Sprintf("%d", expireUnixSecond))
 	return fmt.Sprintf("%s|%d|%s", mac, expireUnixSecond, user)
 }

@@ -55,10 +55,10 @@ type Config struct {
 	trustedIPNetworks  []*net.IPNet
 }
 
-// NewGlobalConfig creates a new global config, parsed from command arguments
-func NewGlobalConfig() *Config {
+// NewGlobalConfig creates a new global config
+func NewGlobalConfig(args []string) *Config {
 	var err error
-	config, err = NewConfig(os.Args[1:])
+	config, err = NewConfig(args)
 	if err != nil {
 		fmt.Printf("%+v\n", err)
 		os.Exit(1)

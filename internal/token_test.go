@@ -51,7 +51,7 @@ func Test_verifyToken(t *testing.T) {
 		config, _ = NewConfig([]string{""})
 
 		expiry := time.Now().Add(-time.Second).Unix()
-		tok := token("test@test.com", expiry)
+		tok := SignToken("test@test.com", expiry)
 
 		_, err := verifyToken(tok)
 		if assert.Error(err) {
@@ -64,7 +64,7 @@ func Test_verifyToken(t *testing.T) {
 		config, _ = NewConfig([]string{""})
 
 		expiry := time.Now().Add(10 * time.Second).Unix()
-		tok := token("test@test.com", expiry)
+		tok := SignToken("test@test.com", expiry)
 
 		email, err := verifyToken(tok)
 		assert.Nil(err, "valid request should not return an error")

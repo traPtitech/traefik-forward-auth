@@ -201,7 +201,7 @@ func useAuthDomain(r *http.Request) (bool, string) {
 // MakeCookie creates an auth cookie
 func MakeCookie(r *http.Request, user string) *http.Cookie {
 	expires := cookieExpiry()
-	value := token(user, expires.Unix())
+	value := SignToken(user, expires.Unix())
 
 	return &http.Cookie{
 		Name:     config.CookieName,

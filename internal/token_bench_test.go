@@ -14,7 +14,7 @@ func BenchmarkVerifyToken_Original(b *testing.B) {
 	config.Secret = []byte(testSecret)
 
 	expiry := time.Now().Unix() + 100
-	tok := token(testUser, expiry)
+	tok := SignToken(testUser, expiry)
 
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
