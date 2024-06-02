@@ -24,25 +24,6 @@ var (
 	ErrInvalidSignature = errors.New("invalid mac signature")
 )
 
-func checkProbeToken(cookie string) (user string, ok bool) {
-	for _, probeToken := range config.ProbeToken {
-		if cookie == probeToken {
-			return config.ProbeTokenUser, true
-		}
-	}
-	return "", false
-}
-
-// ValidateCookie verifies that a cookie matches the expected format of:
-// Cookie = hash(secret, cookie domain, user, expires)|expires|user
-func ValidateCookie(c *http.Cookie) (string, error) {
-	// TODO: remove "probe token" mechanism and implement manual signing of tokens
-	if user, ok := checkProbeToken(c.Value); ok {
-		return user, nil
-	}
-	return verifyToken(c.Value)
-}
-
 // ValidateUser checks if the given user matches either a whitelisted
 // user, as defined by the "whitelist" config parameter. Or is part of
 // a permitted domain, as defined by the "domains" config parameter

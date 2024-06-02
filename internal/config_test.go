@@ -39,8 +39,6 @@ func TestConfigDefaults(t *testing.T) {
 	assert.Equal("", c.SoftAuthUser)
 	assert.Len(c.Whitelist, 0)
 	assert.Equal(c.Port, 4181)
-	assert.Len(c.ProbeToken, 0)
-	assert.Equal(c.ProbeTokenUser, "probe")
 
 	assert.Equal("select_account", c.Providers.Google.Prompt)
 
@@ -58,8 +56,6 @@ func TestConfigParseArgs(t *testing.T) {
 		"--rule.two.action=auth",
 		"--rule.two.rule=\"Host(`two.com`) && Path(`/two`)\"",
 		"--port=8000",
-		"--probe-token=super-secret-token",
-		"--probe-token-user=toki",
 	})
 	require.Nil(t, err)
 
@@ -68,8 +64,6 @@ func TestConfigParseArgs(t *testing.T) {
 	assert.Equal("csrfcookiename", c.CSRFCookieName)
 	assert.Equal("oidc", c.DefaultProvider)
 	assert.Equal(8000, c.Port)
-	assert.ElementsMatch(c.ProbeToken, []string{"super-secret-token"})
-	assert.Equal(c.ProbeTokenUser, "toki")
 
 	// Check rules
 	assert.Equal(map[string]*Rule{

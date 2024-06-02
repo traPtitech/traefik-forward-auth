@@ -113,7 +113,7 @@ func GetUserFromCookie(r *http.Request) (*string, error) {
 	}
 
 	// Validate cookie
-	user, err := ValidateCookie(c)
+	user, err := verifyToken(c.Value)
 	if err != nil {
 		if errors.Is(err, ErrCookieExpired) {
 			return nil, nil

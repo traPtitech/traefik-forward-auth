@@ -18,90 +18,6 @@ import (
  * Tests
  */
 
-func TestAuthValidateCookie(t *testing.T) {
-	r, _ := http.NewRequest("GET", "http://example.com", nil)
-
-	t.Run("should not pass empty with default", func(t *testing.T) {
-		assert := assert.New(t)
-		config, _ = NewConfig([]string{""})
-
-		_, err := ValidateCookie(&http.Cookie{Value: ""})
-		if assert.Error(err) {
-			assert.Equal("Invalid cookie format", err.Error())
-		}
-	})
-
-	t.Run("empty probe token", func(t *testing.T) {
-		assert := assert.New(t)
-		config, _ = NewConfig([]string{})
-		config.ProbeToken = append(config.ProbeToken, "super-secret-token")
-		config.ProbeTokenUser = "toki"
-
-		user, err := ValidateCookie(&http.Cookie{Value: "super-secret-token"})
-		assert.Nil(err, "valid request should not return an error")
-		assert.Equal("toki", user, "valid request should return user")
-	})
-
-	t.Run("should require 3 parts", func(t *testing.T) {
-		assert := assert.New(t)
-		config, _ = NewConfig([]string{""})
-		c := &http.Cookie{}
-
-		c.Value = ""
-		_, err := ValidateCookie(c)
-		if assert.Error(err) {
-			assert.Equal("Invalid cookie format", err.Error())
-		}
-		c.Value = "1|2"
-		_, err = ValidateCookie(c)
-		if assert.Error(err) {
-			assert.Equal("Invalid cookie format", err.Error())
-		}
-		c.Value = "1|2|3|4"
-		_, err = ValidateCookie(c)
-		if assert.Error(err) {
-			assert.Equal("Invalid cookie format", err.Error())
-		}
-	})
-
-	t.Run("should catch invalid mac", func(t *testing.T) {
-		assert := assert.New(t)
-		config, _ = NewConfig([]string{""})
-		c := &http.Cookie{}
-
-		c.Value = "MQ==|2|3"
-		_, err := ValidateCookie(c)
-		if assert.Error(err) {
-			assert.Equal(ErrInvalidSignature, err)
-		}
-	})
-
-	t.Run("should catch expired", func(t *testing.T) {
-		assert := assert.New(t)
-		config, _ = NewConfig([]string{""})
-		c := &http.Cookie{}
-
-		config.Lifetime = time.Second * time.Duration(-1)
-		c = MakeCookie(r, "test@test.com")
-		_, err := ValidateCookie(c)
-		if assert.Error(err) {
-			assert.Equal("Cookie has expired", err.Error())
-		}
-	})
-
-	t.Run("should accept valid cookie", func(t *testing.T) {
-		assert := assert.New(t)
-		config, _ = NewConfig([]string{""})
-		c := &http.Cookie{}
-
-		config.Lifetime = time.Second * time.Duration(10)
-		c = MakeCookie(r, "test@test.com")
-		email, err := ValidateCookie(c)
-		assert.Nil(err, "valid request should not return an error")
-		assert.Equal("test@test.com", email, "valid request should return user email")
-	})
-}
-
 func TestAuthValidateUser(t *testing.T) {
 	assert := assert.New(t)
 	config, _ = NewConfig([]string{})
@@ -454,7 +370,7 @@ func TestAuthMakeCookie(t *testing.T) {
 	assert.Equal("_forward_auth", c.Name)
 	parts := strings.Split(c.Value, "|")
 	assert.Len(parts, 3, "cookie should be 3 parts")
-	_, err := ValidateCookie(c)
+	_, err := verifyToken(c.Value)
 	assert.Nil(err, "should generate valid cookie")
 	assert.Equal("/", c.Path)
 	assert.Equal("app.example.com", c.Domain)
