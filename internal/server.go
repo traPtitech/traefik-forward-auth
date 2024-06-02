@@ -1,6 +1,7 @@
 package tfa
 
 import (
+	"errors"
 	"fmt"
 	"github.com/traefik/traefik/v3/pkg/middlewares/requestdecorator"
 	"net/http"
@@ -112,12 +113,12 @@ func GetUserFromCookie(r *http.Request) (*string, error) {
 	}
 
 	// Validate cookie
-	user, err := ValidateCookie(r, c)
+	user, err := ValidateCookie(c)
 	if err != nil {
-		if err == ErrCookieExpired {
+		if errors.Is(err, ErrCookieExpired) {
 			return nil, nil
 		}
-		if err == ErrInvalidSignature {
+		if errors.Is(err, ErrInvalidSignature) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("invalid cookie: %w", err)

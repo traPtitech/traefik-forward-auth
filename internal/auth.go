@@ -35,12 +35,12 @@ func checkProbeToken(cookie string) (user string, ok bool) {
 
 // ValidateCookie verifies that a cookie matches the expected format of:
 // Cookie = hash(secret, cookie domain, user, expires)|expires|user
-func ValidateCookie(r *http.Request, c *http.Cookie) (string, error) {
+func ValidateCookie(c *http.Cookie) (string, error) {
 	// TODO: remove "probe token" mechanism and implement manual signing of tokens
 	if user, ok := checkProbeToken(c.Value); ok {
 		return user, nil
 	}
-	return verifyToken(cookieDomain(r.Host), c.Value)
+	return verifyToken(c.Value)
 }
 
 // ValidateUser checks if the given user matches either a whitelisted
@@ -220,7 +220,7 @@ func useAuthDomain(r *http.Request) (bool, string) {
 // MakeCookie creates an auth cookie
 func MakeCookie(r *http.Request, user string) *http.Cookie {
 	expires := cookieExpiry()
-	value := token(cookieDomain(r.Host), user, expires.Unix())
+	value := token(user, expires.Unix())
 
 	return &http.Cookie{
 		Name:     config.CookieName,
@@ -365,11 +365,6 @@ func matchCookieDomains(domain string) (bool, string) {
 	}
 
 	return false, p[0]
-}
-
-// Create cookie hmac
-func cookieSignature(requestHost, user, expires string) string {
-	return signature(cookieDomain(requestHost), user, expires)
 }
 
 // Get cookie expiry

@@ -11,9 +11,8 @@ import (
 	"time"
 )
 
-func signature(cookieDomain, user, expireUnixSecond string) string {
+func signature(user, expireUnixSecond string) string {
 	hash := hmac.New(sha256.New, config.Secret)
-	hash.Write([]byte(cookieDomain))
 	hash.Write([]byte(user))
 	hash.Write([]byte(expireUnixSecond))
 	return base64.URLEncoding.EncodeToString(hash.Sum(nil))
@@ -22,17 +21,17 @@ func signature(cookieDomain, user, expireUnixSecond string) string {
 // token signs a new token for recording this authentication.
 //
 // A token consists of three parts:
-// - Signature = HMAC256(key = secret, data = cookieDomain + user + expireUnixSecond)
+// - Signature = HMAC256(key = secret, data = user + expireUnixSecond)
 // - Expiry in unix timestamp (seconds)
 // - Username
 //
 // These parts are concatenated with a vertical bar '|' to make up a single token.
-func token(cookieDomain, user string, expireUnixSecond int64) string {
-	mac := signature(cookieDomain, user, fmt.Sprintf("%d", expireUnixSecond))
+func token(user string, expireUnixSecond int64) string {
+	mac := signature(user, fmt.Sprintf("%d", expireUnixSecond))
 	return fmt.Sprintf("%s|%d|%s", mac, expireUnixSecond, user)
 }
 
-func verifyToken(cookieDomain, token string) (string, error) {
+func verifyToken(token string) (string, error) {
 	parts := strings.Split(token, "|")
 
 	if len(parts) != 3 {
@@ -44,7 +43,7 @@ func verifyToken(cookieDomain, token string) (string, error) {
 		return "", errors.New("Unable to decode cookie mac")
 	}
 
-	expectedSignature := cookieSignature(cookieDomain, parts[2], parts[1])
+	expectedSignature := signature(parts[2], parts[1])
 	expected, err := base64.URLEncoding.DecodeString(expectedSignature)
 	if err != nil {
 		return "", errors.New("Unable to generate mac")
