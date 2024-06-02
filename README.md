@@ -1,7 +1,18 @@
-
 # Traefik Forward Auth
 
 A minimal forward authentication service that provides OAuth/SSO login and authentication for the [traefik](https://github.com/containous/traefik) reverse proxy/load balancer.
+
+## @traPtitech fork notes
+
+This is a further fork of [jordemort/traefik-forward-auth](https://github.com/jordemort/traefik-forward-auth).
+This is to build upon the jordemort/traefik-forward-auth's work of merging several upstream PRs,
+especially the custom user key support in pull/159.
+
+Further customization notes:
+
+- Allows "soft-auth" mode instead of the usual "auth" mode which forces authentication.
+    - Requests with our header will be passed with the user header, while other requests will also be passed through with empty user header value (the default user header value can be configured).
+    - Requests to path `/_oauth/login` will be forcefully authenticated just like "auth" mode.
 
 ## Fork notes
 
