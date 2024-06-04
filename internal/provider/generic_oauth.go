@@ -11,14 +11,16 @@ import (
 
 // GenericOAuth provider
 type GenericOAuth struct {
-	AuthURL      string `long:"auth-url" env:"AUTH_URL" description:"Auth/Login URL"`
-	TokenURL     string `long:"token-url" env:"TOKEN_URL" description:"Token URL"`
-	UserURL      string `long:"user-url" env:"USER_URL" description:"URL used to retrieve user info"`
-	ClientID     string `long:"client-id" env:"CLIENT_ID" description:"Client ID"`
-	ClientSecret string `long:"client-secret" env:"CLIENT_SECRET" description:"Client Secret" json:"-"`
-	TokenStyle   string `long:"token-style" env:"TOKEN_STYLE" default:"header" choice:"header" choice:"query" description:"How token is presented when querying the User URL"`
+	AuthURL      string `mapstructure:"auth-url"`
+	TokenURL     string `mapstructure:"token-url"`
+	UserURL      string `mapstructure:"user-url"`
+	ClientID     string `mapstructure:"client-id"`
+	ClientSecret string `mapstructure:"client-secret"`
+	// TokenStyle defines how token is presented when querying the User URL.
+	// 	Allowed values: "header", "query"
+	TokenStyle string `mapstructure:"token-style"`
 
-	OAuthProvider
+	OAuthProvider `mapstructure:",squash"`
 }
 
 // Name returns the name of the provider
@@ -28,7 +30,7 @@ func (o *GenericOAuth) Name() string {
 
 // Setup performs validation and setup
 func (o *GenericOAuth) Setup() error {
-	// Check parmas
+	// Check params
 	if o.AuthURL == "" || o.TokenURL == "" || o.UserURL == "" || o.ClientID == "" || o.ClientSecret == "" {
 		return errors.New("providers.generic-oauth.auth-url, providers.generic-oauth.token-url, providers.generic-oauth.user-url, providers.generic-oauth.client-id, providers.generic-oauth.client-secret must be set")
 	}

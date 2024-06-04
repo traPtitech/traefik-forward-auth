@@ -10,10 +10,12 @@ import (
 
 // Google provider
 type Google struct {
-	ClientID     string `long:"client-id" env:"CLIENT_ID" description:"Client ID"`
-	ClientSecret string `long:"client-secret" env:"CLIENT_SECRET" description:"Client Secret" json:"-"`
-	Scope        string
-	Prompt       string `long:"prompt" env:"PROMPT" default:"select_account" description:"Space separated list of OpenID prompt options"`
+	ClientID     string `mapstructure:"client-id"`
+	ClientSecret string `mapstructure:"client-secret"`
+	// Scope defines list of requested scopes. Space separated.
+	Scope string
+	// Prompt defines list of OpenID prompt options. Space separated.
+	Prompt string `mapstructure:"prompt"`
 
 	LoginURL *url.URL
 	TokenURL *url.URL

@@ -12,9 +12,9 @@ import (
 
 // Providers contains all the implemented providers
 type Providers struct {
-	Google       Google       `group:"Google Provider" namespace:"google" env-namespace:"GOOGLE"`
-	OIDC         OIDC         `group:"OIDC Provider" namespace:"oidc" env-namespace:"OIDC"`
-	GenericOAuth GenericOAuth `group:"Generic OAuth2 Provider" namespace:"generic-oauth" env-namespace:"GENERIC_OAUTH"`
+	Google       Google       `mapstructure:"google"`
+	OIDC         OIDC         `mapstructure:"oidc"`
+	GenericOAuth GenericOAuth `mapstructure:"generic-oauth"`
 }
 
 // Provider is used to authenticate users
@@ -45,9 +45,9 @@ func GetUser(r io.Reader, UserPath string) (string, error) {
 
 // OAuthProvider is a provider using the oauth2 library
 type OAuthProvider struct {
-	Scopes   []string `long:"scope" env:"SCOPE" env-delim:"," default:"profile" default:"email" description:"Scopes"`
-	Prompt   string   `long:"prompt" env:"PROMPT" description:"Optional prompt query"`
-	Resource string   `long:"resource" env:"RESOURCE" description:"Optional resource indicator"`
+	Scopes   []string `mapstructure:"scopes"`
+	Prompt   string   `mapstructure:"prompt"`
+	Resource string   `mapstructure:"resource"`
 
 	Config *oauth2.Config
 	ctx    context.Context

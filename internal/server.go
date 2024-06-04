@@ -52,11 +52,11 @@ func (s *Server) buildRoutes() {
 
 	// Add callback handler
 	pathToMatcher := func(path string) string { return fmt.Sprintf("Path(`%s`)", path) }
-	lo.Must0(s.muxer.AddRoute(pathToMatcher(config.Path), syntax, 1, s.AuthCallbackHandler()))
+	lo.Must0(s.muxer.AddRoute(pathToMatcher(config.URLPath), syntax, 1, s.AuthCallbackHandler()))
 
 	// Add login / logout handler
-	lo.Must0(s.muxer.AddRoute(pathToMatcher(config.Path+"/login"), syntax, 1, s.LoginHandler(config.DefaultProvider)))
-	lo.Must0(s.muxer.AddRoute(pathToMatcher(config.Path+"/logout"), syntax, 1, s.LogoutHandler()))
+	lo.Must0(s.muxer.AddRoute(pathToMatcher(config.URLPath+"/login"), syntax, 1, s.LoginHandler(config.DefaultProvider)))
+	lo.Must0(s.muxer.AddRoute(pathToMatcher(config.URLPath+"/logout"), syntax, 1, s.LogoutHandler()))
 
 	// Add health check handler
 	lo.Must0(s.muxer.AddRoute(pathToMatcher("/healthz"), syntax, 1, http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
@@ -127,7 +127,7 @@ func GetUserFromCookie(r *http.Request) (*string, error) {
 }
 
 func (s *Server) authHandler(providerName, rule string, soft bool) http.HandlerFunc {
-	p, _ := config.GetConfiguredProvider(providerName)
+	p, _ := config.GetProvider(providerName)
 
 	var unauthorized func(w http.ResponseWriter)
 	if soft {
@@ -166,7 +166,7 @@ func (s *Server) authHandler(providerName, rule string, soft bool) http.HandlerF
 
 		// Explicit login route on each host (only makes sense for "soft-auth" mode)
 		if soft {
-			isForceLogin := strings.HasPrefix(r.Header.Get("X-Forwarded-Uri"), config.Path+"/login")
+			isForceLogin := strings.HasPrefix(r.Header.Get("X-Forwarded-Uri"), config.URLPath+"/login")
 			if isForceLogin {
 				forceLogin(w, r)
 				return
@@ -174,7 +174,7 @@ func (s *Server) authHandler(providerName, rule string, soft bool) http.HandlerF
 		}
 
 		// Explicit logout route on each host
-		isForceLogout := strings.HasPrefix(r.Header.Get("X-Forwarded-Uri"), config.Path+"/logout")
+		isForceLogout := strings.HasPrefix(r.Header.Get("X-Forwarded-Uri"), config.URLPath+"/logout")
 		if isForceLogout {
 			forceLogout(w, r)
 			return
@@ -260,7 +260,7 @@ func (s *Server) AuthCallbackHandler() http.HandlerFunc {
 		}
 
 		// Get provider
-		p, err := config.GetConfiguredProvider(providerName)
+		p, err := config.GetProvider(providerName)
 		if err != nil {
 			logger.WithFields(logrus.Fields{
 				"error":       err,
@@ -307,7 +307,7 @@ func (s *Server) AuthCallbackHandler() http.HandlerFunc {
 		}
 
 		// Get user
-		user, err := p.GetUser(token, config.UserPath)
+		user, err := p.GetUser(token, config.UserIDPath)
 		if err != nil {
 			logger.WithField("error", err).Error("Error getting user")
 			http.Error(w, "Service unavailable", 503)
@@ -329,7 +329,7 @@ func (s *Server) AuthCallbackHandler() http.HandlerFunc {
 
 // LoginHandler logs a user in
 func (s *Server) LoginHandler(providerName string) http.HandlerFunc {
-	p, _ := config.GetConfiguredProvider(providerName)
+	p, _ := config.GetProvider(providerName)
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := s.logger(r, "Login", "default", "Handling login")

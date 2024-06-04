@@ -20,7 +20,7 @@ import (
 
 func TestAuthValidateUser(t *testing.T) {
 	assert := assert.New(t)
-	config, _ = NewConfig([]string{})
+	initTestConfig()
 
 	// Should allow any with no whitelist/domain is specified
 	v := ValidateUser("test@test.com", "default")
@@ -212,7 +212,7 @@ func TestGetRedirectURI(t *testing.T) {
 
 func TestAuthValidateRedirect(t *testing.T) {
 	assert := assert.New(t)
-	config, _ = NewConfig([]string{})
+	initTestConfig()
 
 	newRedirectRequest := func(urlStr string) *http.Request {
 		u, err := url.Parse(urlStr)
@@ -262,7 +262,7 @@ func TestAuthValidateRedirect(t *testing.T) {
 	// With Auth Host
 	//
 	config.AuthHost = "auth.example.com"
-	config.CookieDomains = []CookieDomain{*NewCookieDomain("example.com")}
+	config.CookieDomains = []CookieDomain{"example.com"}
 	errStr = "redirect host does not match any expected hosts (should match cookie domain when using auth host)"
 
 	_, err = ValidateRedirect(
@@ -302,6 +302,7 @@ func TestAuthValidateRedirect(t *testing.T) {
 
 func TestRedirectUri(t *testing.T) {
 	assert := assert.New(t)
+	initTestConfig()
 
 	r := httptest.NewRequest("GET", "http://app.example.com/hello", nil)
 	r.Header.Add("X-Forwarded-Proto", "http")
@@ -309,8 +310,6 @@ func TestRedirectUri(t *testing.T) {
 	//
 	// No Auth Host
 	//
-	config, _ = NewConfig([]string{})
-
 	uri, err := url.Parse(redirectUri(r))
 	assert.Nil(err)
 	assert.Equal("http", uri.Scheme)
@@ -333,7 +332,7 @@ func TestRedirectUri(t *testing.T) {
 	// With correct Auth URL + cookie domain
 	//
 	config.AuthHost = "auth.example.com"
-	config.CookieDomains = []CookieDomain{*NewCookieDomain("example.com")}
+	config.CookieDomains = []CookieDomain{"example.com"}
 
 	// Check url
 	uri, err = url.Parse(redirectUri(r))
@@ -350,7 +349,7 @@ func TestRedirectUri(t *testing.T) {
 	r.Header.Add("X-Forwarded-Proto", "https")
 
 	config.AuthHost = "auth.example.com"
-	config.CookieDomains = []CookieDomain{*NewCookieDomain("example.com")}
+	config.CookieDomains = []CookieDomain{"example.com"}
 
 	// Check url
 	uri, err = url.Parse(redirectUri(r))
@@ -362,7 +361,8 @@ func TestRedirectUri(t *testing.T) {
 
 func TestAuthMakeCookie(t *testing.T) {
 	assert := assert.New(t)
-	config, _ = NewConfig([]string{})
+	initTestConfig()
+
 	r, _ := http.NewRequest("GET", "http://app.example.com", nil)
 	r.Header.Add("X-Forwarded-Host", "app.example.com")
 
@@ -376,7 +376,7 @@ func TestAuthMakeCookie(t *testing.T) {
 	assert.Equal("app.example.com", c.Domain)
 	assert.True(c.Secure)
 
-	expires := time.Now().Local().Add(config.Lifetime)
+	expires := time.Now().Local().Add(config.lifetimeDuration)
 	assert.WithinDuration(expires, c.Expires, 10*time.Second)
 
 	config.CookieName = "testname"
@@ -388,7 +388,8 @@ func TestAuthMakeCookie(t *testing.T) {
 
 func TestAuthMakeCSRFCookie(t *testing.T) {
 	assert := assert.New(t)
-	config, _ = NewConfig([]string{})
+	initTestConfig()
+
 	r, _ := http.NewRequest("GET", "http://app.example.com", nil)
 	r.Header.Add("X-Forwarded-Host", "app.example.com")
 
@@ -398,14 +399,14 @@ func TestAuthMakeCSRFCookie(t *testing.T) {
 	assert.Equal("app.example.com", c.Domain)
 
 	// With cookie domain but no auth url
-	config.CookieDomains = []CookieDomain{*NewCookieDomain("example.com")}
+	config.CookieDomains = []CookieDomain{"example.com"}
 	c = MakeCSRFCookie(r, "12222278901234567890123456789012")
 	assert.Equal("_forward_auth_csrf_122222", c.Name)
 	assert.Equal("app.example.com", c.Domain)
 
 	// With cookie domain and auth url
 	config.AuthHost = "auth.example.com"
-	config.CookieDomains = []CookieDomain{*NewCookieDomain("example.com")}
+	config.CookieDomains = []CookieDomain{"example.com"}
 	c = MakeCSRFCookie(r, "12333378901234567890123456789012")
 	assert.Equal("_forward_auth_csrf_123333", c.Name)
 	assert.Equal("example.com", c.Domain)
@@ -413,7 +414,8 @@ func TestAuthMakeCSRFCookie(t *testing.T) {
 
 func TestAuthClearCSRFCookie(t *testing.T) {
 	assert := assert.New(t)
-	config, _ = NewConfig([]string{})
+	initTestConfig()
+
 	r, _ := http.NewRequest("GET", "http://example.com", nil)
 
 	c := ClearCSRFCookie(r, &http.Cookie{Name: "someCsrfCookie"})
@@ -425,7 +427,8 @@ func TestAuthClearCSRFCookie(t *testing.T) {
 
 func TestAuthValidateCSRFCookie(t *testing.T) {
 	assert := assert.New(t)
-	config, _ = NewConfig([]string{})
+	initTestConfig()
+
 	c := &http.Cookie{}
 	state := ""
 
@@ -514,46 +517,19 @@ func TestAuthNonce(t *testing.T) {
 
 func TestAuthCookieDomainMatch(t *testing.T) {
 	assert := assert.New(t)
-	cd := NewCookieDomain("example.com")
+	cd := "example.com"
 
 	// Exact should match
-	assert.True(cd.Match("example.com"), "exact domain should match")
+	assert.True(CookieDomainMatch(cd, "example.com"), "exact domain should match")
 
 	// Subdomain should match
-	assert.True(cd.Match("test.example.com"), "subdomain should match")
-	assert.True(cd.Match("twolevels.test.example.com"), "subdomain should match")
-	assert.True(cd.Match("many.many.levels.test.example.com"), "subdomain should match")
+	assert.True(CookieDomainMatch(cd, "test.example.com"), "subdomain should match")
+	assert.True(CookieDomainMatch(cd, "twolevels.test.example.com"), "subdomain should match")
+	assert.True(CookieDomainMatch(cd, "many.many.levels.test.example.com"), "subdomain should match")
 
 	// Derived domain should not match
-	assert.False(cd.Match("testexample.com"), "derived domain should not match")
+	assert.False(CookieDomainMatch(cd, "testexample.com"), "derived domain should not match")
 
 	// Other domain should not match
-	assert.False(cd.Match("test.com"), "other domain should not match")
-}
-
-func TestAuthCookieDomains(t *testing.T) {
-	assert := assert.New(t)
-	cds := CookieDomains{}
-
-	err := cds.UnmarshalFlag("one.com,two.org")
-	assert.Nil(err)
-	expected := CookieDomains{
-		CookieDomain{
-			Domain:       "one.com",
-			DomainLen:    7,
-			SubDomain:    ".one.com",
-			SubDomainLen: 8,
-		},
-		CookieDomain{
-			Domain:       "two.org",
-			DomainLen:    7,
-			SubDomain:    ".two.org",
-			SubDomainLen: 8,
-		},
-	}
-	assert.Equal(expected, cds)
-
-	marshal, err := cds.MarshalFlag()
-	assert.Nil(err)
-	assert.Equal("one.com,two.org", marshal)
+	assert.False(CookieDomainMatch(cd, "test.com"), "other domain should not match")
 }

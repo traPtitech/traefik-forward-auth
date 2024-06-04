@@ -1,13 +1,12 @@
 package tfa
 
 import (
+	"github.com/samber/lo"
 	// "fmt"
 	"os"
 	"testing"
 	"time"
 
-	"github.com/sirupsen/logrus"
-	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -16,10 +15,25 @@ import (
  * Tests
  */
 
+func prepareTmpFile(pattern string, content string) (path string) {
+	tmpFile := lo.Must(os.CreateTemp("", pattern))
+	lo.Must(tmpFile.WriteString(content))
+	lo.Must0(tmpFile.Close())
+	return tmpFile.Name()
+}
+
 func TestConfigDefaults(t *testing.T) {
 	assert := assert.New(t)
-	c, err := NewConfig([]string{})
-	assert.Nil(err)
+
+	const leastValidConfig = `
+secret: very-secret
+providers:
+  google:
+    client-id: id
+    client-secret: secret`
+	tmpConfigFile := prepareTmpFile("*.yaml", leastValidConfig)
+	c, err := NewConfig(tmpConfigFile)
+	assert.NoError(err)
 
 	assert.Equal("warn", c.LogLevel)
 	assert.Equal("text", c.LogFormat)
@@ -32,10 +46,10 @@ func TestConfigDefaults(t *testing.T) {
 	assert.Equal("auth", c.DefaultAction)
 	assert.Equal("google", c.DefaultProvider)
 	assert.Len(c.Domains, 0)
-	assert.Equal(CommaSeparatedList{"X-Forwarded-User"}, c.HeaderNames)
-	assert.Equal(time.Second*time.Duration(43200), c.Lifetime)
+	assert.Equal([]string{"X-Forwarded-User"}, c.HeaderNames)
+	assert.Equal(time.Second*time.Duration(43200), c.lifetimeDuration)
 	assert.False(c.MatchWhitelistOrDomain)
-	assert.Equal("/_oauth", c.Path)
+	assert.Equal("/_oauth", c.URLPath)
 	assert.Equal("", c.SoftAuthUser)
 	assert.Len(c.Whitelist, 0)
 	assert.Equal(c.Port, 4181)
@@ -47,22 +61,32 @@ func TestConfigDefaults(t *testing.T) {
 
 func TestConfigParseArgs(t *testing.T) {
 	assert := assert.New(t)
-	c, err := NewConfig([]string{
-		"--cookie-name=cookiename",
-		"--csrf-cookie-name", "\"csrfcookiename\"",
-		"--default-provider", "\"oidc\"",
-		"--rule.1.action=allow",
-		"--rule.1.rule=PathPrefix(`/one`)",
-		"--rule.two.action=auth",
-		"--rule.two.rule=\"Host(`two.com`) && Path(`/two`)\"",
-		"--port=8000",
-	})
+
+	tmpConfigFile := prepareTmpFile("*.yaml", `
+secret: very-secret
+providers:
+  google:
+    client-id: id
+    client-secret: secret
+
+cookie-name: cookiename
+csrf-cookie-name: csrfcookiename
+port: 8000
+
+rules:
+  "1":
+    action: allow
+    rule: `+"PathPrefix(`/one`)"+`
+  two:
+    action: auth
+    rule: `+"Host(`two.com`) && Path(`/two`)"+`
+`)
+	c, err := NewConfig(tmpConfigFile)
 	require.Nil(t, err)
 
 	// Check normal flags
 	assert.Equal("cookiename", c.CookieName)
 	assert.Equal("csrfcookiename", c.CSRFCookieName)
-	assert.Equal("oidc", c.DefaultProvider)
 	assert.Equal(8000, c.Port)
 
 	// Check rules
@@ -70,70 +94,73 @@ func TestConfigParseArgs(t *testing.T) {
 		"1": {
 			Action:   "allow",
 			Rule:     "PathPrefix(`/one`)",
-			Provider: "oidc",
+			Provider: "google",
 		},
 		"two": {
 			Action:   "auth",
 			Rule:     "Host(`two.com`) && Path(`/two`)",
-			Provider: "oidc",
+			Provider: "google",
 		},
 	}, c.Rules)
 }
 
 func TestConfigParseUnknownFlags(t *testing.T) {
-	_, err := NewConfig([]string{
-		"--unknown=_oauthpath2",
-	})
-	if assert.Error(t, err) {
-		assert.Equal(t, "unknown flag: unknown", err.Error())
-	}
-}
-
-func TestConfigParseRuleError(t *testing.T) {
-	assert := assert.New(t)
-
-	// Rule without name
-	_, err := NewConfig([]string{
-		"--rule..action=auth",
-	})
-	if assert.Error(err) {
-		assert.Equal("route name is required", err.Error())
-	}
-
-	// Rule without value
-	c, err := NewConfig([]string{
-		"--rule.one.action=",
-	})
-	if assert.Error(err) {
-		assert.Equal("route param value is required", err.Error())
-	}
-	// Check rules
-	assert.Equal(map[string]*Rule{}, c.Rules)
+	tmpConfigFile := prepareTmpFile("*.yaml", `
+secret: very-secret
+providers:
+  google:
+    client-id: id
+    client-secret: secret
+unknown: _oauthPath2`)
+	_, err := NewConfig(tmpConfigFile)
+	assert.NoError(t, err) // No error on unknown config elements
 }
 
 func TestConfigCommaSeperated(t *testing.T) {
 	assert := assert.New(t)
-	c, err := NewConfig([]string{
-		"--whitelist=test@test.com,test2@test2.com",
-	})
+
+	c := initTestConfig()
+	tmpConfigFile := prepareTmpFile("*.yaml", `
+secret: very-secret
+providers:
+  google:
+    client-id: id
+    client-secret: secret
+whitelist: test@test.com,test2@test2.com`)
+	c, err := NewConfig(tmpConfigFile)
 	require.Nil(t, err)
 
-	expected1 := CommaSeparatedList{"test@test.com", "test2@test2.com"}
+	expected1 := []string{"test@test.com", "test2@test2.com"}
 	assert.Equal(expected1, c.Whitelist, "should read legacy comma separated list whitelist")
 }
 
-func TestConfigParseIni(t *testing.T) {
+func TestConfigParseYaml(t *testing.T) {
 	assert := assert.New(t)
-	c, err := NewConfig([]string{
-		"--config=../test/config0",
-		"--config=../test/config1",
-		"--csrf-cookie-name=csrfcookiename",
-	})
+
+	tmpConfigFile := prepareTmpFile("*.yaml", `
+secret: very-secret
+providers:
+  google:
+    client-id: id
+    client-secret: secret
+
+cookie-name: yamlcookiename
+csrf-cookie-name: yamlcsrfcookiename
+url-path: one
+
+rules:
+  "1":
+    action: allow
+    rule: `+"PathPrefix(`/one`)"+`
+  two:
+    action: auth
+    rule: `+"Host(`two.com`) && Path(`/two`)"+`
+`)
+	c, err := NewConfig(tmpConfigFile)
 	require.Nil(t, err)
 
-	assert.Equal("inicookiename", c.CookieName, "should be read from ini file")
-	assert.Equal("csrfcookiename", c.CSRFCookieName, "should be read from ini file")
-	assert.Equal("/two", c.Path, "variable in second ini file should override first ini file")
+	assert.Equal("yamlcookiename", c.CookieName, "should be read from yaml file")
+	assert.Equal("yamlcsrfcookiename", c.CSRFCookieName, "should be read from yaml file")
 	assert.Equal(map[string]*Rule{
 		"1": {
 			Action:   "allow",
@@ -148,174 +175,158 @@ func TestConfigParseIni(t *testing.T) {
 	}, c.Rules)
 }
 
-func TestConfigFileBackwardsCompatability(t *testing.T) {
+func TestConfigParseEnvironment(t *testing.T) {
+	// NOTE: As of github.com/spf13/viper@v1.19.0, this behavior requires "viper_bind_struct" build tag to work.
+	// Otherwise, keys not explicitly registered to viper (except the very existence of struct fields) will not be
+	// returned by viper.AllKeys(), and they will not be looked up on unmarshalling.
+
 	assert := assert.New(t)
-	c, err := NewConfig([]string{
-		"--config=../test/config-legacy",
-	})
+	t.Setenv("SECRET", "super-secret")
+	t.Setenv("COOKIE_NAME", "env_cookie_name")
+	t.Setenv("PROVIDERS_GOOGLE_CLIENT_ID", "env_client_id")
+	t.Setenv("PROVIDERS_GOOGLE_CLIENT_SECRET", "very-secret")
+	t.Setenv("COOKIE_DOMAINS", "test1.com,example.org")
+	t.Setenv("DOMAINS", "test2.com,example.org")
+	t.Setenv("WHITELIST", "test3.com,example.org")
+
+	require.Equal(t, "env_cookie_name", os.Getenv("COOKIE_NAME"))
+
+	c, err := NewConfig("")
 	require.Nil(t, err)
 
-	assert.Equal("/two", c.Path, "variable in legacy config file should be read")
-	assert.Equal("auth.legacy.com", c.AuthHost, "variable in legacy config file should be read")
-}
-
-func TestConfigParseEnvironment(t *testing.T) {
-	assert := assert.New(t)
-	os.Setenv("COOKIE_NAME", "env_cookie_name")
-	os.Setenv("PROVIDERS_GOOGLE_CLIENT_ID", "env_client_id")
-	os.Setenv("COOKIE_DOMAIN", "test1.com,example.org")
-	os.Setenv("DOMAIN", "test2.com,example.org")
-	os.Setenv("WHITELIST", "test3.com,example.org")
-
-	c, err := NewConfig([]string{})
-	assert.Nil(err)
-
+	assert.Equal("super-secret", c.Secret, "variable should be read from environment")
 	assert.Equal("env_cookie_name", c.CookieName, "variable should be read from environment")
-	assert.Equal("env_client_id", c.Providers.Google.ClientID, "namespace variable should be read from environment")
+	assert.Equal("env_client_id", c.Providers.Google.ClientID, "variable should be read from environment")
+	assert.Equal("very-secret", c.Providers.Google.ClientSecret, "variable should be read from environment")
 	assert.Equal([]CookieDomain{
-		*NewCookieDomain("test1.com"),
-		*NewCookieDomain("example.org"),
-	}, c.CookieDomains, "array variable should be read from environment COOKIE_DOMAIN")
-	assert.Equal(CommaSeparatedList{"test2.com", "example.org"}, c.Domains, "array variable should be read from environment DOMAIN")
-	assert.Equal(CommaSeparatedList{"test3.com", "example.org"}, c.Whitelist, "array variable should be read from environment WHITELIST")
-
-	os.Unsetenv("COOKIE_NAME")
-	os.Unsetenv("PROVIDERS_GOOGLE_CLIENT_ID")
-	os.Unsetenv("COOKIE_DOMAIN")
-	os.Unsetenv("DOMAIN")
-	os.Unsetenv("WHITELIST")
+		"test1.com",
+		"example.org",
+	}, c.CookieDomains, "array variable should be read from environment COOKIE_DOMAINS")
+	assert.Equal([]string{"test2.com", "example.org"}, c.Domains, "array variable should be read from environment DOMAINS")
+	assert.Equal([]string{"test3.com", "example.org"}, c.Whitelist, "array variable should be read from environment WHITELIST")
 }
 
 func TestConfigTransformation(t *testing.T) {
 	assert := assert.New(t)
-	c, err := NewConfig([]string{
-		"--url-path=_oauthpath",
-		"--secret=verysecret",
-		"--lifetime=200",
-	})
+
+	tmpConfigFile := prepareTmpFile("*.yaml", `
+secret: verysecret
+providers:
+  google:
+    client-id: id
+    client-secret: secret
+url-path: _oauthpath
+lifetime: 200
+`)
+	c, err := NewConfig(tmpConfigFile)
 	require.Nil(t, err)
 
-	assert.Equal("/_oauthpath", c.Path, "path should add slash to front")
+	assert.Equal("/_oauthpath", c.URLPath, "path should add slash to front")
 
-	assert.Equal("verysecret", c.SecretString)
-	assert.Equal([]byte("verysecret"), c.Secret, "secret should be converted to byte array")
+	assert.Equal("verysecret", c.Secret)
 
-	assert.Equal(200, c.LifetimeString)
-	assert.Equal(time.Second*time.Duration(200), c.Lifetime, "lifetime should be read and converted to duration")
+	assert.Equal(200, c.Lifetime)
+	assert.Equal(time.Second*time.Duration(200), c.lifetimeDuration, "lifetime should be read and converted to duration")
 }
 
 func TestConfigValidate(t *testing.T) {
-	assert := assert.New(t)
-
-	// Install new logger + hook
-	var hook *test.Hook
-	log, hook = test.NewNullLogger()
-	log.ExitFunc = func(code int) {}
-
-	// Validate defualt config + rule error
-	c, _ := NewConfig([]string{
-		"--rule.1.action=bad",
+	t.Run("missing secret", func(t *testing.T) {
+		tmpConfigFile := prepareTmpFile("*.yaml", `
+providers:
+  google:
+    client-id: id
+    client-secret: secret
+rules:
+  "1":
+    action: auth
+`)
+		_, err := NewConfig(tmpConfigFile)
+		assert.Error(t, err)
+		assert.Equal(t, "\"secret\" option must be set", err.Error())
 	})
-	c.Validate()
 
-	logs := hook.AllEntries()
-	assert.Len(logs, 3)
-
-	// Should have fatal error requiring secret
-	assert.Equal("\"secret\" option must be set", logs[0].Message)
-	assert.Equal(logrus.FatalLevel, logs[0].Level)
-
-	// Should also have default provider (google) error
-	assert.Equal("providers.google.client-id, providers.google.client-secret must be set", logs[1].Message)
-	assert.Equal(logrus.FatalLevel, logs[1].Level)
-
-	// Should validate rule
-	assert.Equal("invalid rule action, must be \"auth\", \"soft-auth\", or \"allow\"", logs[2].Message)
-	assert.Equal(logrus.FatalLevel, logs[2].Level)
-
-	hook.Reset()
-
-	// Validate with invalid providers
-	c, _ = NewConfig([]string{
-		"--secret=veryverysecret",
-		"--providers.google.client-id=id",
-		"--providers.google.client-secret=secret",
-		"--rule.1.action=auth",
-		"--rule.1.provider=bad2",
+	t.Run("default provider option not set", func(t *testing.T) {
+		tmpConfigFile := prepareTmpFile("*.yaml", `
+secret: secret
+rules:
+  "1":
+    action: auth
+`)
+		_, err := NewConfig(tmpConfigFile)
+		assert.Error(t, err)
+		assert.Equal(t, "providers.google.client-id, providers.google.client-secret must be set", err.Error())
 	})
-	c.Validate()
 
-	logs = hook.AllEntries()
-	assert.Len(logs, 1)
+	t.Run("invalid rule action", func(t *testing.T) {
+		tmpConfigFile := prepareTmpFile("*.yaml", `
+secret: secret
+providers:
+  google:
+    client-id: id
+    client-secret: secret
+rules:
+  "1":
+    action: bad
+`)
+		_, err := NewConfig(tmpConfigFile)
+		assert.Error(t, err)
+		assert.Equal(t, "invalid rule action, must be \"auth\", \"soft-auth\", or \"allow\"", err.Error())
+	})
 
-	// Should have error for rule provider
-	assert.Equal("unknown provider: bad2", logs[0].Message)
-	assert.Equal(logrus.FatalLevel, logs[0].Level)
+	t.Run("invalid rule provider", func(t *testing.T) {
+		tmpConfigFile := prepareTmpFile("*.yaml", `
+secret: secret
+providers:
+  google:
+    client-id: id
+    client-secret: secret
+rules:
+  "1":
+    action: auth
+    provider: bad2
+`)
+		_, err := NewConfig(tmpConfigFile)
+		assert.Error(t, err)
+		assert.Equal(t, "unknown provider: bad2", err.Error())
+	})
 }
 
 func TestConfigGetProvider(t *testing.T) {
 	assert := assert.New(t)
-	c, _ := NewConfig([]string{})
+	c := initTestConfig()
 
-	// Should be able to get "google" provider
+	// Should be able to get "google" default provider
 	p, err := c.GetProvider("google")
 	assert.Nil(err)
 	assert.Equal(&c.Providers.Google, p)
 
-	// Should be able to get "oidc" provider
+	// Should fail to get valid "oidc" provider as it's not configured
 	p, err = c.GetProvider("oidc")
-	assert.Nil(err)
-	assert.Equal(&c.Providers.OIDC, p)
-
-	// Should be able to get "generic-oauth" provider
-	p, err = c.GetProvider("generic-oauth")
-	assert.Nil(err)
-	assert.Equal(&c.Providers.GenericOAuth, p)
+	if assert.Error(err) {
+		assert.Equal("unconfigured provider: oidc", err.Error())
+	}
 
 	// Should catch unknown provider
 	p, err = c.GetProvider("bad")
 	if assert.Error(err) {
-		assert.Equal("unknown provider: bad", err.Error())
+		assert.Equal("unconfigured provider: bad", err.Error())
 	}
-}
-
-func TestConfigGetConfiguredProvider(t *testing.T) {
-	assert := assert.New(t)
-	c, _ := NewConfig([]string{})
-
-	// Should be able to get "google" default provider
-	p, err := c.GetConfiguredProvider("google")
-	assert.Nil(err)
-	assert.Equal(&c.Providers.Google, p)
-
-	// Should fail to get valid "oidc" provider as it's not configured
-	p, err = c.GetConfiguredProvider("oidc")
-	if assert.Error(err) {
-		assert.Equal("unconfigured provider: oidc", err.Error())
-	}
-}
-
-func TestConfigCommaSeparatedList(t *testing.T) {
-	assert := assert.New(t)
-	list := CommaSeparatedList{}
-
-	err := list.UnmarshalFlag("one,two")
-	assert.Nil(err)
-	assert.Equal(CommaSeparatedList{"one", "two"}, list, "should parse comma sepearated list")
-
-	marshal, err := list.MarshalFlag()
-	assert.Nil(err)
-	assert.Equal("one,two", marshal, "should marshal back to comma sepearated list")
 }
 
 func TestConfigTrustedNetworks(t *testing.T) {
 	assert := assert.New(t)
 
-	c, err := NewConfig([]string{
-		"--trusted-ip-address=1.2.3.4",
-		"--trusted-ip-address=30.1.0.0/16",
-	})
-
+	tmpConfigFile := prepareTmpFile("*.yaml", `
+secret: secret
+providers:
+  google:
+    client-id: id
+    client-secret: secret
+trusted-ip-addresses:
+  - 1.2.3.4
+  - 30.1.0.0/16
+`)
+	c, err := NewConfig(tmpConfigFile)
 	assert.NoError(err)
 
 	table := map[string]bool{
@@ -333,5 +344,4 @@ func TestConfigTrustedNetworks(t *testing.T) {
 		assert.NoError(err)
 		assert.Equal(want, got, "ip address: %s", in)
 	}
-
 }

@@ -1,19 +1,13 @@
 package tfa
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+	"github.com/spf13/viper"
 	"net"
 	"os"
-	"regexp"
-	"strconv"
 	"strings"
 	"time"
-
-	"github.com/thomseddon/go-flags"
 
 	"github.com/traPtitech/traefik-forward-auth/internal/provider"
 )
@@ -22,89 +16,160 @@ var config *Config
 
 // Config holds the runtime application config
 type Config struct {
-	LogLevel  string `long:"log-level" env:"LOG_LEVEL" default:"warn" choice:"trace" choice:"debug" choice:"info" choice:"warn" choice:"error" choice:"fatal" choice:"panic" description:"Log level"`
-	LogFormat string `long:"log-format"  env:"LOG_FORMAT" default:"text" choice:"text" choice:"json" choice:"pretty" description:"Log format"`
+	// LogLevel defines logrus log level.
+	// 	Allowed values: "trace", "debug", "info", "warn", "error", "fatal", "panic"
+	LogLevel string `mapstructure:"log-level"`
+	// LogFormat defines logrus log format.
+	// 	Allowed values: "text", "json", "pretty"
+	LogFormat string `mapstructure:"log-format"`
 
-	AuthHost               string               `long:"auth-host" env:"AUTH_HOST" description:"Single host to use when returning from 3rd party auth"`
-	Config                 func(s string) error `long:"config" env:"CONFIG" description:"Path to config file" json:"-"`
-	CookieDomains          []CookieDomain       `long:"cookie-domain" env:"COOKIE_DOMAIN" env-delim:"," description:"Domain to set auth cookie on, can be set multiple times"`
-	InsecureCookie         bool                 `long:"insecure-cookie" env:"INSECURE_COOKIE" description:"Use insecure cookies"`
-	CookieName             string               `long:"cookie-name" env:"COOKIE_NAME" default:"_forward_auth" description:"Cookie Name"`
-	CSRFCookieName         string               `long:"csrf-cookie-name" env:"CSRF_COOKIE_NAME" default:"_forward_auth_csrf" description:"CSRF Cookie Name"`
-	DefaultAction          string               `long:"default-action" env:"DEFAULT_ACTION" default:"auth" choice:"auth" choice:"soft-auth" choice:"allow" description:"Default action"`
-	DefaultProvider        string               `long:"default-provider" env:"DEFAULT_PROVIDER" default:"google" choice:"google" choice:"oidc" choice:"generic-oauth" description:"Default provider"`
-	Domains                CommaSeparatedList   `long:"domain" env:"DOMAIN" env-delim:"," description:"Only allow given email domains, comma separated, can be set multiple times"`
-	HeaderNames            CommaSeparatedList   `long:"header-names" env:"HEADER_NAMES" default:"X-Forwarded-User" description:"User header names, comma separated"`
-	LifetimeString         int                  `long:"lifetime" env:"LIFETIME" default:"43200" description:"Lifetime in seconds"`
-	MatchWhitelistOrDomain bool                 `long:"match-whitelist-or-domain" env:"MATCH_WHITELIST_OR_DOMAIN" description:"Allow users that match *either* whitelist or domain (enabled by default in v3)"`
-	Path                   string               `long:"url-path" env:"URL_PATH" default:"/_oauth" description:"Callback URL Path"`
-	SecretString           string               `long:"secret" env:"SECRET" description:"Secret used for signing (required)" json:"-"`
-	SoftAuthUser           string               `long:"soft-auth-user" env:"SOFT_AUTH_USER" default:"" description:"If set, username used in header if unauthorized with soft-auth action"`
-	UserPath               string               `long:"user-id-path" env:"USER_ID_PATH" default:"email" description:"Dot notation path of a UserID for use with whitelist and X-Forwarded-User"`
-	Whitelist              CommaSeparatedList   `long:"whitelist" env:"WHITELIST" env-delim:"," description:"Only allow given UserID, comma separated, can be set multiple times"`
-	Port                   int                  `long:"port" env:"PORT" default:"4181" description:"Port to listen on"`
+	// AuthHost defines a single host to use when returning from 3rd party auth.
+	AuthHost string `mapstructure:"auth-host"`
+	// CookieDomains defines domains to set auth cookie on. Comma separated.
+	CookieDomains []CookieDomain `mapstructure:"cookie-domains"`
+	// InsecureCookie specifies to use insecure cookies.
+	InsecureCookie bool `mapstructure:"insecure-cookie"`
+	// CookieName defines cookie name to use.
+	CookieName string `mapstructure:"cookie-name"`
+	// CSRFCookieName defines CSRF cookie name to use.
+	CSRFCookieName string `mapstructure:"csrf-cookie-name"`
+	// DefaultAction defines default action for providers.
+	DefaultAction string `mapstructure:"default-action"`
+	// DefaultProvider defines default provider.
+	// 	Allowed values: "google", "oidc", "generic-oauth"
+	DefaultProvider string `mapstructure:"default-provider"`
+	// Domains defines to only allow given email domains. Comma separated.
+	Domains []string `mapstructure:"domains"`
+	// HeaderNames define user header names. Comma separated.
+	HeaderNames []string `mapstructure:"header-names"`
+	// Lifetime defines cookie lifetime in seconds.
+	Lifetime int `mapstructure:"lifetime"`
+	// MatchWhitelistOrDomain allows users that match *either* whitelist or domain.
+	MatchWhitelistOrDomain bool `mapstructure:"match-whitelist-or-domain"`
+	// URLPath defines callback URL path.
+	URLPath string `mapstructure:"url-path"`
+	// Secret defines secret used for signing (required).
+	Secret string `mapstructure:"secret"`
+	// SoftAuthUser defines username used in header if unauthorized with soft-auth action.
+	SoftAuthUser string `mapstructure:"soft-auth-user"`
+	// UserIDPath is dot notation path of a UserID for use with whitelist and user header names (default: X-Forwarded-Auth).
+	UserIDPath string `mapstructure:"user-id-path"`
+	// Whitelist only allows given UserID. Comma separated.
+	Whitelist []string `mapstructure:"whitelist"`
+	// TrustedIPAddresses define list of trusted IP addresses or IP networks (in CIDR notation) that are considered authenticated. Comma separated.
+	TrustedIPAddresses []string `mapstructure:"trusted-ip-addresses"`
+	// Port defines port to listen on.
+	Port int `mapstructure:"port"`
 
-	Providers provider.Providers `group:"providers" namespace:"providers" env-namespace:"PROVIDERS"`
-	Rules     map[string]*Rule   `long:"rule.<name>.<param>" description:"Rule definitions, param can be: \"action\", \"rule\" or \"provider\""`
+	Providers provider.Providers `mapstructure:"providers"`
+	Rules     map[string]*Rule   `mapstructure:"rules"`
 
 	// Filled during transformations
-	Secret   []byte `json:"-"`
-	Lifetime time.Duration
+	lifetimeDuration  time.Duration
+	trustedIPNetworks []*net.IPNet
+}
 
-	TrustedIPAddresses []string `long:"trusted-ip-address" env:"TRUSTED_IP_ADDRESS" env-delim:"," description:"List of trusted IP addresses or IP networks (in CIDR notation) that are considered authenticated"`
-	trustedIPNetworks  []*net.IPNet
+func init() {
+	// Automatically load from respective environment variables
+	viper.AutomaticEnv()
+	// Allow getting underscore-delimited environment variables via dot-delimited or hyphen-delimited key values
+	// e.g. viper.Get("foo.bar") will lookup "FOO_BAR" environment variable so these can be mapped to structs
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_", "-", "_"))
+	// NOTE: Building with build tag "viper_bind_struct" allows binding dynamic struct fields from environment variables,
+	// even without explicitly letting viper "know" that a key exists via viper.SetDefault() etc.
+	// In the future, this feature flag might change: https://github.com/spf13/viper/issues/1851
+
+	// Set defaults
+	viper.SetDefault("log-level", "warn")
+	viper.SetDefault("log-format", "text")
+
+	viper.SetDefault("cookie-name", "_forward_auth")
+	viper.SetDefault("csrf-cookie-name", "_forward_auth_csrf")
+	viper.SetDefault("default-action", "auth")
+	viper.SetDefault("default-provider", "google")
+	viper.SetDefault("header-names", "X-Forwarded-User")
+	viper.SetDefault("lifetime", "43200")
+	viper.SetDefault("url-path", "/_oauth")
+	viper.SetDefault("user-id-path", "email")
+	viper.SetDefault("port", "4181")
+
+	viper.SetDefault("providers.google.prompt", "select_account")
+	viper.SetDefault("providers.oidc.scopes", "profile,email")
+	viper.SetDefault("providers.generic-oauth.token-style", "header")
+	viper.SetDefault("providers.generic-oauth.scopes", "profile,email")
 }
 
 // NewGlobalConfig creates a new global config
-func NewGlobalConfig(args []string) *Config {
+func NewGlobalConfig(location string) *Config {
 	var err error
-	config, err = NewConfig(args)
+	config, err = NewConfig(location)
 	if err != nil {
 		fmt.Printf("%+v\n", err)
 		os.Exit(1)
 	}
-
 	return config
 }
 
-// TODO: move config parsing into new func "NewParsedConfig"
+// NewConfig parses configuration into a config object
+func NewConfig(location string) (*Config, error) {
+	var c Config
 
-// NewConfig parses and validates provided configuration into a config object
-func NewConfig(args []string) (*Config, error) {
-	c := &Config{
-		Rules: map[string]*Rule{},
-	}
-
-	err := c.parseFlags(args)
-	if err != nil {
-		return c, err
-	}
-
-	// TODO: as log flags have now been parsed maybe we should return here so
-	// any further errors can be logged via logrus instead of printed?
-
-	// TODO: Rename "Validate" method to "Setup" and move all below logic
-
-	// Setup
-	// Set default provider on any rules where it's not specified
-	for _, rule := range c.Rules {
-		if rule.Provider == "" {
-			rule.Provider = c.DefaultProvider
+	if location != "" {
+		viper.SetConfigFile(location)
+		err := viper.ReadInConfig()
+		if err != nil {
+			return nil, err
 		}
 	}
 
-	// Transformations
-	if len(c.Path) > 0 && c.Path[0] != '/' {
-		c.Path = "/" + c.Path
-	}
-	c.Secret = []byte(c.SecretString)
-	c.Lifetime = time.Second * time.Duration(c.LifetimeString)
-
-	if err := c.parseTrustedNetworks(); err != nil {
+	err := viper.Unmarshal(&c)
+	if err != nil {
 		return nil, err
 	}
 
-	return c, nil
+	err = c.setup()
+	if err != nil {
+		return nil, err
+	}
+
+	return &c, nil
+}
+
+// setup performs validation and setup.
+func (c *Config) setup() error {
+	// Check for showstopper errors
+	if len(c.Secret) == 0 {
+		return errors.New("\"secret\" option must be set")
+	}
+	if len(c.HeaderNames) == 0 {
+		return errors.New("\"header-names\" option must be set")
+	}
+
+	// Field transformations
+	if len(c.URLPath) > 0 && c.URLPath[0] != '/' {
+		c.URLPath = "/" + c.URLPath
+	}
+	c.lifetimeDuration = time.Second * time.Duration(c.Lifetime)
+
+	if err := c.parseTrustedNetworks(); err != nil {
+		return err
+	}
+
+	// Setup default provider
+	err := c.setupProvider(c.DefaultProvider)
+	if err != nil {
+		return err
+	}
+
+	// Setup rules and corresponding providers
+	for _, rule := range c.Rules {
+		err = rule.Setup(c)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (c *Config) parseTrustedNetworks() error {
@@ -135,163 +200,14 @@ func (c *Config) parseTrustedNetworks() error {
 	return nil
 }
 
-func (c *Config) parseFlags(args []string) error {
-	p := flags.NewParser(c, flags.Default|flags.IniUnknownOptionHandler)
-	p.UnknownOptionHandler = c.parseUnknownFlag
-
-	i := flags.NewIniParser(p)
-	c.Config = func(s string) error {
-		// Try parsing at as an ini
-		err := i.ParseFile(s)
-
-		// If it fails with a syntax error, try converting legacy to ini
-		if err != nil && strings.Contains(err.Error(), "malformed key=value") {
-			converted, convertErr := convertLegacyToIni(s)
-			if convertErr != nil {
-				// If conversion fails, return the original error
-				return err
-			}
-
-			fmt.Println("config format deprecated, please use ini format")
-			return i.Parse(converted)
-		}
-
-		return err
-	}
-
-	_, err := p.ParseArgs(args)
-	if err != nil {
-		return handleFlagError(err)
-	}
-
-	return nil
-}
-
-func (c *Config) parseUnknownFlag(option string, arg flags.SplitArgument, args []string) ([]string, error) {
-	// Parse rules in the format "rule.<name>.<param>"
-	parts := strings.Split(option, ".")
-	if len(parts) == 3 && parts[0] == "rule" {
-		// Ensure there is a name
-		name := parts[1]
-		if len(name) == 0 {
-			return args, errors.New("route name is required")
-		}
-
-		// Get value, or pop the next arg
-		val, ok := arg.Value()
-		if !ok && len(args) > 1 {
-			val = args[0]
-			args = args[1:]
-		}
-
-		// Check value
-		if len(val) == 0 {
-			return args, errors.New("route param value is required")
-		}
-
-		// Unquote if required
-		if val[0] == '"' {
-			var err error
-			val, err = strconv.Unquote(val)
-			if err != nil {
-				return args, err
-			}
-		}
-
-		// Get or create rule
-		rule, ok := c.Rules[name]
-		if !ok {
-			rule = NewRule()
-			c.Rules[name] = rule
-		}
-
-		// Add param value to rule
-		switch parts[2] {
-		case "action":
-			rule.Action = val
-		case "rule":
-			rule.Rule = val
-		case "provider":
-			rule.Provider = val
-		case "whitelist":
-			list := CommaSeparatedList{}
-			err := list.UnmarshalFlag(val)
-			if err != nil {
-				return args, err
-			}
-			rule.Whitelist = list
-		case "domains":
-			list := CommaSeparatedList{}
-			err := list.UnmarshalFlag(val)
-			if err != nil {
-				return args, err
-			}
-			rule.Domains = list
-		default:
-			return args, fmt.Errorf("invalid route param: %v", option)
-		}
-	} else {
-		return args, fmt.Errorf("unknown flag: %v", option)
-	}
-
-	return args, nil
-}
-
-func handleFlagError(err error) error {
-	var flagsErr *flags.Error
-	ok := errors.As(err, &flagsErr)
-	if ok && flagsErr.Type == flags.ErrHelp {
-		// Library has just printed cli help
-		os.Exit(0)
-	}
-
-	return err
-}
-
-var legacyFileFormat = regexp.MustCompile(`(?m)^([a-z-]+) (.*)$`)
-
-func convertLegacyToIni(name string) (io.Reader, error) {
-	b, err := os.ReadFile(name)
-	if err != nil {
-		return nil, err
-	}
-
-	return bytes.NewReader(legacyFileFormat.ReplaceAll(b, []byte("$1=$2"))), nil
-}
-
-// Validate validates a config object
-func (c *Config) Validate() {
-	// Check for showstopper errors
-	if len(c.Secret) == 0 {
-		log.Fatal("\"secret\" option must be set")
-	}
-
-	if len(c.HeaderNames) == 0 {
-		log.Fatal("\"header-names\" option must be set")
-	}
-
-	// Setup default provider
-	err := c.setupProvider(c.DefaultProvider)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// Check rules (validates the rule and the rule provider)
-	for _, rule := range c.Rules {
-		err = rule.Validate(c)
-		if err != nil {
-			log.Fatal(err)
-		}
-	}
-}
-
-func (c *Config) String() string {
-	jsonConf, _ := json.Marshal(c)
-	return string(jsonConf)
-}
-
-// GetProvider returns the provider of the given name
+// GetProvider returns the provider of the given name, if it has been
+// configured. Returns an error if the provider is unknown, or hasn't been configured
 func (c *Config) GetProvider(name string) (provider.Provider, error) {
+	// Check the provider has been configured
+	if !c.isProviderConfigured(name) {
+		return nil, fmt.Errorf("unconfigured provider: %s", name)
+	}
+
 	switch name {
 	case "google":
 		return &c.Providers.Google, nil
@@ -304,15 +220,20 @@ func (c *Config) GetProvider(name string) (provider.Provider, error) {
 	return nil, fmt.Errorf("unknown provider: %s", name)
 }
 
-// GetConfiguredProvider returns the provider of the given name, if it has been
-// configured. Returns an error if the provider is unknown, or hasn't been configured
-func (c *Config) GetConfiguredProvider(name string) (provider.Provider, error) {
-	// Check the provider has been configured
-	if !c.providerConfigured(name) {
-		return nil, fmt.Errorf("unconfigured provider: %s", name)
+func (c *Config) isProviderConfigured(name string) bool {
+	// Check default provider
+	if name == c.DefaultProvider {
+		return true
 	}
 
-	return c.GetProvider(name)
+	// Check rule providers
+	for _, rule := range c.Rules {
+		if name == rule.Provider {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (c *Config) IsIPAddressAuthenticated(address string) (bool, error) {
@@ -328,22 +249,6 @@ func (c *Config) IsIPAddressAuthenticated(address string) (bool, error) {
 	}
 
 	return false, nil
-}
-
-func (c *Config) providerConfigured(name string) bool {
-	// Check default provider
-	if name == c.DefaultProvider {
-		return true
-	}
-
-	// Check rule providers
-	for _, rule := range c.Rules {
-		if name == rule.Provider {
-			return true
-		}
-	}
-
-	return false
 }
 
 func (c *Config) setupProvider(name string) error {
@@ -363,11 +268,11 @@ func (c *Config) setupProvider(name string) error {
 
 // Rule holds defined rules
 type Rule struct {
-	Action    string
-	Rule      string
-	Provider  string
-	Whitelist CommaSeparatedList
-	Domains   CommaSeparatedList
+	Action    string   `mapstructure:"action"`
+	Rule      string   `mapstructure:"rule"`
+	Provider  string   `mapstructure:"provider"`
+	Whitelist []string `mapstructure:"whitelist"`
+	Domains   []string `mapstructure:"domains"`
 }
 
 // NewRule creates a new rule object
@@ -377,27 +282,16 @@ func NewRule() *Rule {
 	}
 }
 
-// Validate validates a rule
-func (r *Rule) Validate(c *Config) error {
+// Setup performs validation and setup.
+func (r *Rule) Setup(c *Config) error {
 	if r.Action != "auth" && r.Action != "soft-auth" && r.Action != "allow" {
 		return errors.New("invalid rule action, must be \"auth\", \"soft-auth\", or \"allow\"")
 	}
 
+	// Set default provider on any rules where it's not specified
+	if r.Provider == "" {
+		r.Provider = c.DefaultProvider
+	}
+
 	return c.setupProvider(r.Provider)
-}
-
-// Legacy support for comma separated lists
-
-// CommaSeparatedList provides legacy support for config values provided as csv
-type CommaSeparatedList []string
-
-// UnmarshalFlag converts a comma separated list to an array
-func (c *CommaSeparatedList) UnmarshalFlag(value string) error {
-	*c = append(*c, strings.Split(value, ",")...)
-	return nil
-}
-
-// MarshalFlag converts an array back to a comma separated list
-func (c *CommaSeparatedList) MarshalFlag() (string, error) {
-	return strings.Join(*c, ","), nil
 }

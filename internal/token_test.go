@@ -10,7 +10,7 @@ import (
 func Test_verifyToken(t *testing.T) {
 	t.Run("should not pass empty with default", func(t *testing.T) {
 		assert := assert.New(t)
-		config, _ = NewConfig([]string{""})
+		config, _ = NewConfig("")
 
 		_, err := verifyToken("")
 		if assert.Error(err) {
@@ -20,7 +20,7 @@ func Test_verifyToken(t *testing.T) {
 
 	t.Run("should require 3 parts", func(t *testing.T) {
 		assert := assert.New(t)
-		config, _ = NewConfig([]string{""})
+		config, _ = NewConfig("")
 
 		_, err := verifyToken("")
 		if assert.Error(err) {
@@ -38,7 +38,7 @@ func Test_verifyToken(t *testing.T) {
 
 	t.Run("should catch invalid mac", func(t *testing.T) {
 		assert := assert.New(t)
-		config, _ = NewConfig([]string{""})
+		config, _ = NewConfig("")
 
 		_, err := verifyToken("MQ==|2|3")
 		if assert.Error(err) {
@@ -48,7 +48,7 @@ func Test_verifyToken(t *testing.T) {
 
 	t.Run("should catch expired", func(t *testing.T) {
 		assert := assert.New(t)
-		config, _ = NewConfig([]string{""})
+		config, _ = NewConfig("")
 
 		expiry := time.Now().Add(-time.Second).Unix()
 		tok := SignToken("test@test.com", expiry)
@@ -61,7 +61,7 @@ func Test_verifyToken(t *testing.T) {
 
 	t.Run("should accept valid cookie", func(t *testing.T) {
 		assert := assert.New(t)
-		config, _ = NewConfig([]string{""})
+		config, _ = NewConfig("")
 
 		expiry := time.Now().Add(10 * time.Second).Unix()
 		tok := SignToken("test@test.com", expiry)

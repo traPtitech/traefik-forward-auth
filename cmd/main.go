@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"github.com/sirupsen/logrus"
 	tfa "github.com/traPtitech/traefik-forward-auth/internal"
@@ -11,14 +12,14 @@ import (
 )
 
 func initConfigs(args []string) (*tfa.Config, *logrus.Logger) {
+	// Parse flags
+	_ = flag.CommandLine.Parse(args)
+
 	// Parse options
-	config := tfa.NewGlobalConfig(args)
+	config := tfa.NewGlobalConfig(*config)
 
 	// Setup logger
-	log := tfa.NewDefaultLogger()
-
-	// Perform config validation
-	config.Validate()
+	log := tfa.NewDefaultLogger(config)
 
 	return config, log
 }
@@ -60,6 +61,8 @@ func sign() {
 	token := tfa.SignToken(user, expiry)
 	fmt.Println(token)
 }
+
+var config = flag.String("config", "", "Path to config file")
 
 func main() {
 	if len(os.Args) >= 2 && os.Args[1] == "sign" {

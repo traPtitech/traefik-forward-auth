@@ -5,14 +5,27 @@ A minimal forward authentication service that provides OAuth/SSO login and authe
 ## @traPtitech fork notes
 
 This is a further fork of [jordemort/traefik-forward-auth](https://github.com/jordemort/traefik-forward-auth).
-This is to build upon the jordemort/traefik-forward-auth's work of merging several upstream PRs,
+This is to build upon the `jordemort/traefik-forward-auth` work of merging several upstream PRs,
 especially the custom user key support in pull/159.
+
+This fork is **NOT** backwards-compatible with upstream releases.
+Read below to see major (breaking) changes from upstream.
 
 Further customization notes:
 
 - Allows "soft-auth" mode instead of the usual "auth" mode which forces authentication.
     - Requests with our header will be passed with the user header, while other requests will also be passed through with empty user header value (the default user header value can be configured).
     - Requests to path `/_oauth/login` will be forcefully authenticated just like "auth" mode.
+- Now builds against traefik v3.
+    - Rule syntax now follows those of traefik v3.
+- Configuration revamp to use github.com/spf13/viper.
+    - Allows ease parsing and configuration from env, yaml, json, or toml files.
+    - Instead, no longer accepts configurations from CLI args.
+    - Several field names have been changed alongside to be more consistent overall.
+
+### Releases
+
+Releases of this fork are published to the [GitHub Container Registry](https://github.com/traPtitech/traefik-forward-auth/pkgs/container/traefik-forward-auth).
 
 ## Fork notes
 
@@ -69,16 +82,6 @@ It seems to be a better bet to match against the `X-Forwarded-For` header.
   - [Logging Out](#logging-out)
 - [Copyright](#copyright)
 - [License](#license)
-
-## Releases
-
-Releases of this fork are published to the [GitHub Container Registry](https://github.com/traPtitech/traefik-forward-auth/pkgs/container/traefik-forward-auth).
-
-I currently only publish a `latest` tag.
-
-#### Upgrade Guide
-
-This fork should be backwards-compatible with upstream releases.
 
 ## Usage
 
@@ -164,74 +167,27 @@ Please see the [Provider Setup](https://github.com/thomseddon/traefik-forward-au
 
 ## Configuration
 
-### Overview
+### Command-line Args
 
-The following configuration options are supported:
+Supply path to config file as CLI args.
 
 ```
-Usage:
-  traefik-forward-auth [OPTIONS]
-
-Application Options:
-      --log-level=[trace|debug|info|warn|error|fatal|panic] Log level (default: warn) [$LOG_LEVEL]
-      --log-format=[text|json|pretty]                       Log format (default: text) [$LOG_FORMAT]
-      --auth-host=                                          Single host to use when returning from 3rd party auth [$AUTH_HOST]
-      --config=                                             Path to config file [$CONFIG]
-      --cookie-domain=                                      Domain to set auth cookie on, can be set multiple times [$COOKIE_DOMAIN]
-      --insecure-cookie                                     Use insecure cookies [$INSECURE_COOKIE]
-      --cookie-name=                                        Cookie Name (default: _forward_auth) [$COOKIE_NAME]
-      --csrf-cookie-name=                                   CSRF Cookie Name (default: _forward_auth_csrf) [$CSRF_COOKIE_NAME]
-      --default-action=[auth|soft-auth|allow]               Default action (default: auth) [$DEFAULT_ACTION]
-      --default-provider=[google|oidc|generic-oauth]        Default provider (default: google) [$DEFAULT_PROVIDER]
-      --domain=                                             Only allow given email domains, comma separated, can be set multiple times [$DOMAIN]
-      --header-names=                                       User header names, comma separated (default: X-Forwarded-User) [$HEADER_NAMES]
-      --lifetime=                                           Lifetime in seconds (default: 43200) [$LIFETIME]
-      --match-whitelist-or-domain                           Allow users that match *either* whitelist or domain (enabled by default in v3) [$MATCH_WHITELIST_OR_DOMAIN]
-      --url-path=                                           Callback URL Path (default: /_oauth) [$URL_PATH]
-      --secret=                                             Secret used for signing (required) [$SECRET]
-      --soft-auth-user=                                     If set, username used in header if unauthorized with soft-auth action [$SOFT_AUTH_USER]
-      --user-id-path=                                       Dot notation path of a UserID for use with whitelist and X-Forwarded-User (default: email) [$USER_ID_PATH]
-      --whitelist=                                          Only allow given UserID, comma separated, can be set multiple times [$WHITELIST]
-      --port=                                               Port to listen on (default: 4181) [$PORT]
-      --rule.<name>.<param>=                                Rule definitions, param can be: "action", "rule" or "provider"
-      --trusted-ip-address=                                 List of trusted IP addresses or IP networks (in CIDR notation) that are considered authenticated [$TRUSTED_IP_ADDRESS]
-
-Google Provider:
-      --providers.google.client-id=                         Client ID [$PROVIDERS_GOOGLE_CLIENT_ID]
-      --providers.google.client-secret=                     Client Secret [$PROVIDERS_GOOGLE_CLIENT_SECRET]
-      --providers.google.prompt=                            Space separated list of OpenID prompt options (default: select_account) [$PROVIDERS_GOOGLE_PROMPT]
-
-OIDC Provider:
-      --providers.oidc.issuer-url=                          Issuer URL [$PROVIDERS_OIDC_ISSUER_URL]
-      --providers.oidc.client-id=                           Client ID [$PROVIDERS_OIDC_CLIENT_ID]
-      --providers.oidc.client-secret=                       Client Secret [$PROVIDERS_OIDC_CLIENT_SECRET]
-      --providers.oidc.scope=                               Scopes (default: profile, email) [$PROVIDERS_OIDC_SCOPE]
-      --providers.oidc.prompt=                              Optional prompt query [$PROVIDERS_OIDC_PROMPT]
-      --providers.oidc.resource=                            Optional resource indicator [$PROVIDERS_OIDC_RESOURCE]
-
-Generic OAuth2 Provider:
-      --providers.generic-oauth.auth-url=                   Auth/Login URL [$PROVIDERS_GENERIC_OAUTH_AUTH_URL]
-      --providers.generic-oauth.token-url=                  Token URL [$PROVIDERS_GENERIC_OAUTH_TOKEN_URL]
-      --providers.generic-oauth.user-url=                   URL used to retrieve user info [$PROVIDERS_GENERIC_OAUTH_USER_URL]
-      --providers.generic-oauth.client-id=                  Client ID [$PROVIDERS_GENERIC_OAUTH_CLIENT_ID]
-      --providers.generic-oauth.client-secret=              Client Secret [$PROVIDERS_GENERIC_OAUTH_CLIENT_SECRET]
-      --providers.generic-oauth.token-style=[header|query]  How token is presented when querying the User URL (default: header) [$PROVIDERS_GENERIC_OAUTH_TOKEN_STYLE]
-      --providers.generic-oauth.scope=                      Scopes (default: profile, email) [$PROVIDERS_GENERIC_OAUTH_SCOPE]
-      --providers.generic-oauth.prompt=                     Optional prompt query [$PROVIDERS_GENERIC_OAUTH_PROMPT]
-      --providers.generic-oauth.resource=                   Optional resource indicator [$PROVIDERS_GENERIC_OAUTH_RESOURCE]
-
-Help Options:
-  -h, --help                                                Show this help message
+Usage of traefik-foward-auth:
+  -config string
+        Path to config file
 ```
 
-All options can be supplied in any of the following ways, in the following precedence (first is highest precedence):
+### File / Env Configuration
 
-1. **Command Arguments/Flags** - As shown above
-2. **Environment Variables** - As shown in square brackets above
-3. **File**
-    1. Use INI format (e.g. `url-path = _oauthpath`)
-    2. Specify the file location via the `--config` flag or `$CONFIG` environment variable
-    3. Can be specified multiple times, each file will be read in the order they are passed
+Configuration options and documentations are available in [config.go](./internal/config.go).
+
+This library uses github.com/spf13/viper to parse configurations.
+They are parsed in the following precedence order.
+
+1. **Environment Variables** - Make all letters uppercase, and replace "-" and "." with "_" to get corresponding env key name
+   - For example, `providers.google.client-secret` config key corresponds to `PROVIDERS_GOOGLE_CLIENT_SECRET` environment variable.
+2. **Configuration Files** - Can be written in JSON, TOML, or YAML
+3. **Default** - See config.go for default values
 
 ### Option Details
 

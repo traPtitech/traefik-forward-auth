@@ -12,7 +12,7 @@ import (
 )
 
 func signature(user, expireUnixSecond string) string {
-	hash := hmac.New(sha256.New, config.Secret)
+	hash := hmac.New(sha256.New, []byte(config.Secret))
 	hash.Write([]byte(user))
 	hash.Write([]byte(expireUnixSecond))
 	return base64.URLEncoding.EncodeToString(hash.Sum(nil))

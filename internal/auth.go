@@ -66,7 +66,7 @@ func ValidateUser(user, ruleName string) bool {
 }
 
 // ValidateWhitelist checks if the email is in whitelist
-func ValidateWhitelist(user string, whitelist CommaSeparatedList) bool {
+func ValidateWhitelist(user string, whitelist []string) bool {
 	for _, whitelist := range whitelist {
 		if user == whitelist {
 			return true
@@ -76,7 +76,7 @@ func ValidateWhitelist(user string, whitelist CommaSeparatedList) bool {
 }
 
 // ValidateDomains checks if the email matches a whitelisted domain
-func ValidateDomains(user string, domains CommaSeparatedList) bool {
+func ValidateDomains(user string, domains []string) bool {
 	parts := strings.Split(user, "@")
 	if len(parts) < 2 {
 		return false
@@ -174,10 +174,10 @@ func currentUrl(r *http.Request) string {
 func redirectUri(r *http.Request) string {
 	if use, _ := useAuthDomain(r); use {
 		p := r.Header.Get("X-Forwarded-Proto")
-		return fmt.Sprintf("%s://%s%s", p, config.AuthHost, config.Path)
+		return fmt.Sprintf("%s://%s%s", p, config.AuthHost, config.URLPath)
 	}
 
-	return fmt.Sprintf("%s%s", redirectBase(r), config.Path)
+	return fmt.Sprintf("%s%s", redirectBase(r), config.URLPath)
 }
 
 // Should we use auth host + what it is
@@ -340,8 +340,8 @@ func matchCookieDomains(domain string) (bool, string) {
 	p := strings.Split(domain, ":")
 
 	for _, d := range config.CookieDomains {
-		if d.Match(p[0]) {
-			return true, d.Domain
+		if CookieDomainMatch(d, p[0]) {
+			return true, d
 		}
 	}
 
@@ -350,73 +350,24 @@ func matchCookieDomains(domain string) (bool, string) {
 
 // Get cookie expiry
 func cookieExpiry() time.Time {
-	return time.Now().Local().Add(config.Lifetime)
+	return time.Now().Local().Add(config.lifetimeDuration)
 }
 
 // CookieDomain holds cookie domain info
-type CookieDomain struct {
-	Domain       string
-	DomainLen    int
-	SubDomain    string
-	SubDomainLen int
-}
+type CookieDomain = string
 
-// NewCookieDomain creates a new CookieDomain from the given domain string
-func NewCookieDomain(domain string) *CookieDomain {
-	return &CookieDomain{
-		Domain:       domain,
-		DomainLen:    len(domain),
-		SubDomain:    fmt.Sprintf(".%s", domain),
-		SubDomainLen: len(domain) + 1,
-	}
-}
-
-// Match checks if the given host matches this CookieDomain
-func (c *CookieDomain) Match(host string) bool {
+// CookieDomainMatch checks if the given host matches this CookieDomain
+func CookieDomainMatch(cd CookieDomain, host string) bool {
 	// Exact domain match?
-	if host == c.Domain {
+	if host == cd {
 		return true
 	}
 
 	// Subdomain match?
-	if len(host) >= c.SubDomainLen && host[len(host)-c.SubDomainLen:] == c.SubDomain {
+	subDomain := fmt.Sprintf(".%s", cd)
+	if len(host) >= len(subDomain) && host[len(host)-len(subDomain):] == subDomain {
 		return true
 	}
 
 	return false
-}
-
-// UnmarshalFlag converts a string to a CookieDomain
-func (c *CookieDomain) UnmarshalFlag(value string) error {
-	*c = *NewCookieDomain(value)
-	return nil
-}
-
-// MarshalFlag converts a CookieDomain to a string
-func (c *CookieDomain) MarshalFlag() (string, error) {
-	return c.Domain, nil
-}
-
-// CookieDomains provides legacy support for comma separated list of cookie domains
-type CookieDomains []CookieDomain
-
-// UnmarshalFlag converts a comma separated list of cookie domains to an array
-// of CookieDomains
-func (c *CookieDomains) UnmarshalFlag(value string) error {
-	if len(value) > 0 {
-		for _, d := range strings.Split(value, ",") {
-			cookieDomain := NewCookieDomain(d)
-			*c = append(*c, *cookieDomain)
-		}
-	}
-	return nil
-}
-
-// MarshalFlag converts an array of CookieDomain to a comma seperated list
-func (c *CookieDomains) MarshalFlag() (string, error) {
-	var domains []string
-	for _, d := range *c {
-		domains = append(domains, d.Domain)
-	}
-	return strings.Join(domains, ","), nil
 }
