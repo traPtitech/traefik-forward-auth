@@ -37,8 +37,8 @@ type Config struct {
 	CSRFCookieName string `mapstructure:"csrf-cookie-name"`
 	// Lifetime defines cookie lifetime in seconds.
 	Lifetime int `mapstructure:"lifetime"`
-	// URLPath defines callback URL path.
-	URLPath string `mapstructure:"url-path"`
+	// CallbackPath defines callback URL path.
+	CallbackPath string `mapstructure:"callback-path"`
 	// Secret defines secret used for signing a token (required).
 	Secret string `mapstructure:"secret"`
 	// TrustedIPAddresses define list of trusted IP addresses or IP networks (in CIDR notation) that are considered authenticated. Comma separated.
@@ -84,7 +84,7 @@ func init() {
 	viper.SetDefault("cookie-name", "_forward_auth")
 	viper.SetDefault("csrf-cookie-name", "_forward_auth_csrf")
 	viper.SetDefault("lifetime", "43200")
-	viper.SetDefault("url-path", "/_oauth")
+	viper.SetDefault("callback-path", "/_oauth")
 	viper.SetDefault("user-id-path", "email")
 	viper.SetDefault("port", "4181")
 	viper.SetDefault("info-fields", "email")
@@ -95,10 +95,7 @@ func init() {
 	viper.SetDefault("providers.generic-oauth.token-style", "header")
 	viper.SetDefault("providers.generic-oauth.scopes", "profile,email")
 
-	viper.SetDefault("rules.default.action", "auth")
-	viper.SetDefault("rules.default.route-rule", "")
-	viper.SetDefault("rules.default.priority", -10000)
-	viper.SetDefault("rules.default.auth-rule", "")
+	// Rules default values are defined in (*Config).setup below.
 
 	viper.SetDefault("headers.default.name", "X-Forwarded-User")
 	viper.SetDefault("headers.default.source", "email")
@@ -149,8 +146,8 @@ func (c *Config) setup() error {
 
 	// Field transformations
 	c.secretBytes = []byte(c.Secret)
-	if len(c.URLPath) > 0 && c.URLPath[0] != '/' {
-		c.URLPath = "/" + c.URLPath
+	if len(c.CallbackPath) > 0 && c.CallbackPath[0] != '/' {
+		c.CallbackPath = "/" + c.CallbackPath
 	}
 	c.lifetimeDuration = time.Second * time.Duration(c.Lifetime)
 
@@ -158,13 +155,41 @@ func (c *Config) setup() error {
 		return err
 	}
 
-	// If default rule was overridden, set it up
+	// Add default rules
+	if c.Rules == nil {
+		c.Rules = make(map[string]*Rule)
+	}
 	if _, ok := c.Rules["default"]; !ok {
 		c.Rules["default"] = &Rule{
 			Action:    "auth",
 			RouteRule: "",
 			Priority:  -10000,
 			AuthRule:  "",
+		}
+	}
+	if _, ok := c.Rules["callback"]; !ok {
+		c.Rules["callback"] = &Rule{
+			Action:    "callback",
+			RouteRule: fmt.Sprintf("Path(`%s`)", c.CallbackPath),
+			Priority:  1,
+			AuthRule:  "",
+		}
+	}
+	if _, ok := c.Rules["health"]; !ok {
+		c.Rules["health"] = &Rule{
+			Action: "health",
+			// No overlay
+			RouteRule: "!HeaderRegexp(`X-Forwarded-Host`, `.+`) && Path(`/healthz`)",
+			Priority:  1,
+			AuthRule:  "",
+		}
+	}
+
+	// Auth host check
+	if c.AuthHost != "" {
+		match, _ := c.matchCookieDomains(c.AuthHost)
+		if !match {
+			return errors.New("\"auth-host\" option must match one of \"cookie-domains\"")
 		}
 	}
 
@@ -277,7 +302,7 @@ func (c *Config) IsIPAddressAuthenticated(address string) (bool, error) {
 // Rule holds defined rules
 type Rule struct {
 	// Action defines auth action to take no this route.
-	// 	Allowed values: "allow", "soft-auth", "allow"
+	// 	Allowed values: "allow", "soft-auth", "allow", "login", "logout", "callback", "health"
 	Action string `mapstructure:"action"`
 	// RouteRule defines router rule to determine which request matches this rule.
 	// Uses traefik v3 router syntax.
@@ -302,14 +327,15 @@ type Rule struct {
 	//
 	// Example: Regexp(`email`, `^.+@example.com$`) && !In(`id`, `not-allowed-user`)
 	//
-	// Defaults to: True(). (catch-all)
+	// Defaults to: True(). (pass-all)
 	AuthRule string `mapstructure:"auth-rule"`
 }
 
 // setup performs validation and setup.
 func (r *Rule) setup(c *Config) error {
-	if r.Action != "auth" && r.Action != "soft-auth" && r.Action != "allow" {
-		return errors.New("invalid rule action, must be \"auth\", \"soft-auth\", or \"allow\"")
+	allowed := []string{"auth", "soft-auth", "allow", "login", "logout", "callback", "health"}
+	if !lo.Contains(allowed, r.Action) {
+		return fmt.Errorf("invalid rule action, must be one of: %v", allowed)
 	}
 
 	// Set defaults (catch-all)

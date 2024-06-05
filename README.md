@@ -15,7 +15,6 @@ Further customization notes:
 
 - Allows "soft-auth" mode instead of the usual "auth" mode which forces authentication.
     - Requests with our header will be passed with the user header, while other requests will also be passed through with empty user header value.
-    - Requests to path `/_oauth/login` will be forcefully authenticated just like "auth" mode.
 - Now builds against traefik v3.
     - Rule syntax now follows those of traefik v3.
 - Configuration revamp to use github.com/spf13/viper.
@@ -260,7 +259,7 @@ They are parsed in the following precedence order.
 
    Default: `43200` (12 hours)
 
-- `url-path`
+- `callback-path`
 
    Customise the path that this service uses to handle the callback following authentication.
 
@@ -278,10 +277,14 @@ They are parsed in the following precedence order.
 
    - `<name>` can be any string and is only used to group rules together
    - `<param>` can be:
-       - `action` - same usage as [`default-action`](#default-action), supported values:
+       - `action` - supported values:
            - `auth` (default)
            - `soft-auth`
            - `allow`
+           - `login`
+           - `logout`
+           - `callback`
+           - `health`
        - `route-rule` - a rule to match a request, this uses traefik's v3 rule parser for which you can find the documentation here: https://docs.traefik.io/v3.0/routing/routers/#rule, supported values are summarised here:
            - ``Header(`key`, `value`)``
            - ``HeaderRegexp(`key`, `regexp`)``
@@ -320,7 +323,9 @@ They are parsed in the following precedence order.
 
 - `rules.default.action`
 
-  Specifies the behavior when a request does not match any additionally defined `rules`. Valid options are `auth`, `soft-auth`, or `allow`.
+  Specifies the behavior when a request does not match any additionally defined `rules`. 
+  
+  Valid options: `auth`, `soft-auth`, `allow`, `login`, `logout`, `callback`, `health`
 
   Default: `auth` (i.e. all requests require authentication)
 
@@ -445,7 +450,7 @@ rule:
 
 #### Overlay Mode
 
-Overlay is the default operation mode, in this mode the authorisation endpoint is overlaid onto any domain. By default the `/_oauth` path is used, this can be customised using the `url-path` option.
+Overlay is the default operation mode, in this mode the authorisation endpoint is overlaid onto any domain. By default the `/_oauth` path is used, this can be customised using the `callback-path` option.
 
 The user flow will be:
 
@@ -483,9 +488,19 @@ Two criteria must be met for an `auth-host` to be used:
 
 Please note: For Auth Host mode to work, you must ensure that requests to your auth-host are routed to the traefik-forward-auth container, as demonstrated with the service labels in the [docker-compose-auth.yml](examples/traefik-v2/swarm/docker-compose-auth-host.yml) example and the [ingressroute resource](examples/traefik-v2/kubernetes/advanced-separate-pod/traefik-forward-auth/ingress.yaml) in a kubernetes example.
 
+### Logging in
+
+The service provides an endpoint to allow users to explicitly login.
+This behavior is achieved by setting "rules.<name>.action" option to `login`.
+
+This action only makes sense for the `soft-auth` mode.
+
+You can set `redirect` query parameter to redirect on login (defaults to `/`).
+
 ### Logging Out
 
-The service provides an endpoint to clear a users session and "log them out". The path is created by appending `/logout` to your configured `path` and so with the default settings it will be: `/_oauth/logout`.
+The service provides additional "mode" to clear a users session and "log them out".
+This behavior is achieved by setting "rules.<name>.action" option to `logout`.
 
 You can set `redirect` query parameter to redirect on logout (defaults to `/`).
 Note that the user will not have a valid auth cookie after being logged out.

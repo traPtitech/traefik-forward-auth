@@ -99,10 +99,10 @@ func currentUrl(r *http.Request) string {
 func redirectUri(r *http.Request) string {
 	if use, _ := useAuthDomain(r); use {
 		p := r.Header.Get("X-Forwarded-Proto")
-		return fmt.Sprintf("%s://%s%s", p, config.AuthHost, config.URLPath)
+		return fmt.Sprintf("%s://%s%s", p, config.AuthHost, config.CallbackPath)
 	}
 
-	return fmt.Sprintf("%s%s", redirectBase(r), config.URLPath)
+	return fmt.Sprintf("%s%s", redirectBase(r), config.CallbackPath)
 }
 
 // Should we use auth host + what it is
@@ -112,10 +112,10 @@ func useAuthDomain(r *http.Request) (bool, string) {
 	}
 
 	// Does the request match a given cookie domain?
-	reqMatch, reqHost := matchCookieDomains(r.Host)
+	reqMatch, reqHost := config.matchCookieDomains(r.Host)
 
 	// Do any of the auth hosts match a cookie domain?
-	authMatch, authHost := matchCookieDomains(config.AuthHost)
+	authMatch, authHost := config.matchCookieDomains(config.AuthHost)
 
 	// We need both to match the same domain
 	return reqMatch && authMatch && reqHost == authHost, reqHost
@@ -243,8 +243,7 @@ func Nonce() (error, string) {
 
 // Cookie domain
 func cookieDomain(requestHost string) string {
-	// Check if any of the given cookie domains matches
-	_, domain := matchCookieDomains(requestHost)
+	_, domain := config.matchCookieDomains(requestHost)
 	return domain
 }
 
@@ -263,11 +262,11 @@ func csrfCookieDomain(r *http.Request) string {
 }
 
 // Return matching cookie domain if exists
-func matchCookieDomains(domain string) (bool, string) {
+func (c *Config) matchCookieDomains(domain string) (bool, string) {
 	// Remove port
 	p := strings.Split(domain, ":")
 
-	for _, d := range config.CookieDomains {
+	for _, d := range c.CookieDomains {
 		if CookieDomainMatch(d, p[0]) {
 			return true, d
 		}

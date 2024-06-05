@@ -318,6 +318,12 @@ func TestServerLogout(t *testing.T) {
 	require := require.New(t)
 	assert := assert.New(t)
 	initTestConfig()
+	config.Rules["logout"] = &Rule{
+		Action:    "logout",
+		RouteRule: "Path(`/_oauth/logout`)",
+		Priority:  1,
+		AuthRule:  "True()",
+	}
 
 	req := newHTTPRequest("GET", "http://example.com/_oauth/logout")
 	res, _ := doHttpRequest(req, nil)

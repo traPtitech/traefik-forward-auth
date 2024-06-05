@@ -2,6 +2,8 @@ package tfa
 
 import (
 	"github.com/samber/lo"
+	"strings"
+
 	// "fmt"
 	"os"
 	"testing"
@@ -45,7 +47,7 @@ providers:
 	assert.Equal("_forward_auth_csrf", c.CSRFCookieName)
 	assert.Equal("google", c.Provider)
 	assert.Equal(time.Second*time.Duration(43200), c.lifetimeDuration)
-	assert.Equal("/_oauth", c.URLPath)
+	assert.Equal("/_oauth", c.CallbackPath)
 	assert.Equal(4181, c.Port)
 	assert.Equal([]string{"email"}, c.InfoFields)
 
@@ -58,6 +60,18 @@ providers:
 			Action:    "auth",
 			RouteRule: "PathPrefix(`/`)",
 			Priority:  -10000,
+			AuthRule:  "True()",
+		},
+		"callback": {
+			Action:    "callback",
+			RouteRule: "Path(`/_oauth`)",
+			Priority:  1,
+			AuthRule:  "True()",
+		},
+		"health": {
+			Action:    "health",
+			RouteRule: "!HeaderRegexp(`X-Forwarded-Host`, `.+`) && Path(`/healthz`)",
+			Priority:  1,
 			AuthRule:  "True()",
 		},
 	}, c.Rules)
@@ -101,26 +115,18 @@ rules:
 	assert.Equal(8000, c.Port)
 
 	// Check rules
-	assert.Equal(map[string]*Rule{
-		"default": {
-			Action:    "auth",
-			RouteRule: "PathPrefix(`/`)",
-			Priority:  -10000,
-			AuthRule:  "True()",
-		},
-		"1": {
-			Action:    "allow",
-			RouteRule: "PathPrefix(`/one`)",
-			Priority:  0,
-			AuthRule:  "True()",
-		},
-		"two": {
-			Action:    "auth",
-			RouteRule: "Host(`two.com`) && Path(`/two`)",
-			Priority:  0,
-			AuthRule:  "True()",
-		},
-	}, c.Rules)
+	assert.Equal(&Rule{
+		Action:    "allow",
+		RouteRule: "PathPrefix(`/one`)",
+		Priority:  0,
+		AuthRule:  "True()",
+	}, c.Rules["1"])
+	assert.Equal(&Rule{
+		Action:    "auth",
+		RouteRule: "Host(`two.com`) && Path(`/two`)",
+		Priority:  0,
+		AuthRule:  "True()",
+	}, c.Rules["two"])
 }
 
 func TestConfigParseUnknownFlags(t *testing.T) {
@@ -181,26 +187,18 @@ rules:
 
 	assert.Equal("yamlcookiename", c.CookieName, "should be read from yaml file")
 	assert.Equal("yamlcsrfcookiename", c.CSRFCookieName, "should be read from yaml file")
-	assert.Equal(map[string]*Rule{
-		"default": {
-			Action:    "auth",
-			RouteRule: "PathPrefix(`/`)",
-			Priority:  -10000,
-			AuthRule:  "True()",
-		},
-		"1": {
-			Action:    "allow",
-			RouteRule: "PathPrefix(`/one`)",
-			Priority:  0,
-			AuthRule:  "True()",
-		},
-		"two": {
-			Action:    "auth",
-			RouteRule: "Host(`two.com`) && Path(`/two`)",
-			Priority:  0,
-			AuthRule:  "True()",
-		},
-	}, c.Rules)
+	assert.Equal(&Rule{
+		Action:    "allow",
+		RouteRule: "PathPrefix(`/one`)",
+		Priority:  0,
+		AuthRule:  "True()",
+	}, c.Rules["1"])
+	assert.Equal(&Rule{
+		Action:    "auth",
+		RouteRule: "Host(`two.com`) && Path(`/two`)",
+		Priority:  0,
+		AuthRule:  "True()",
+	}, c.Rules["two"])
 }
 
 func TestConfigParseEnvironment(t *testing.T) {
@@ -239,13 +237,13 @@ providers:
   google:
     client-id: id
     client-secret: secret
-url-path: _oauthpath
+callback-path: _oauthpath
 lifetime: 200
 `)
 	c, err := NewConfig(tmpConfigFile)
 	require.Nil(t, err)
 
-	assert.Equal("/_oauthpath", c.URLPath, "path should add slash to front")
+	assert.Equal("/_oauthpath", c.CallbackPath, "path should add slash to front")
 
 	assert.Equal("verysecret", c.Secret)
 
@@ -319,7 +317,7 @@ rules:
 `)
 		_, err := NewConfig(tmpConfigFile)
 		assert.Error(t, err)
-		assert.Equal(t, "invalid rule action, must be \"auth\", \"soft-auth\", or \"allow\"", err.Error())
+		assert.True(t, strings.HasPrefix(err.Error(), "invalid rule action, must be one of"))
 	})
 
 	t.Run("invalid auth rule", func(t *testing.T) {

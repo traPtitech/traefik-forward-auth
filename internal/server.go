@@ -46,10 +46,6 @@ func (s *Server) buildRoutes() {
 
 	// Let's build a router
 	const syntax = "v3"
-	addRoute := func(rule string, h http.Handler) {
-		lo.Must0(s.muxer.AddRoute(rule, syntax, len(rule), h))
-	}
-
 	for name, rule := range config.Rules {
 		// err should not occur because rule is validated beforehand
 		priority := lo.Ternary(rule.Priority == 0, len(rule.RouteRule), rule.Priority)
@@ -57,18 +53,6 @@ func (s *Server) buildRoutes() {
 		handler := s.Handler(rule.Action, config.Provider, name, authPred)
 		lo.Must0(s.muxer.AddRoute(rule.RouteRule, syntax, priority, handler))
 	}
-
-	// Add callback handler
-	pathToMatcher := func(path string) string { return fmt.Sprintf("Path(`%s`)", path) }
-	addRoute(pathToMatcher(config.URLPath), s.AuthCallbackHandler())
-
-	// Add explicit logout handler
-	addRoute(pathToMatcher(config.URLPath+"/logout"), s.LogoutHandler())
-
-	// Add health check handler
-	addRoute(pathToMatcher("/healthz"), http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-		rw.WriteHeader(http.StatusOK)
-	}))
 }
 
 // RootHandler Overwrites the request method, host and URL with those from the
@@ -98,6 +82,14 @@ func (s *Server) Handler(action, providerName, rule string, authPred authrule.Pr
 		return s.softAuthHandler(providerName, rule, authPred)
 	case "auth":
 		return s.hardAuthHandler(providerName, rule, authPred)
+	case "callback":
+		return s.AuthCallbackHandler()
+	case "login":
+		return s.LoginHandler(providerName)
+	case "logout":
+		return s.LogoutHandler()
+	case "health":
+		return s.healthCheckHandler()
 	default:
 		panic("unknown action " + action)
 	}
@@ -154,8 +146,6 @@ func (s *Server) authHandler(providerName, rule string, soft bool, authPred auth
 		}
 	}
 
-	forceLogout := s.LogoutHandler()
-
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Logging setup
 		logger := s.logger(r, "Auth", rule, "Authenticating request")
@@ -172,13 +162,6 @@ func (s *Server) authHandler(providerName, rule string, soft bool, authPred auth
 				w.WriteHeader(200)
 				return
 			}
-		}
-
-		// Explicit logout route on each host
-		isForceLogout := strings.HasPrefix(r.Header.Get("X-Forwarded-Uri"), config.URLPath+"/logout")
-		if isForceLogout {
-			forceLogout(w, r)
-			return
 		}
 
 		// Get user from cookie
@@ -332,6 +315,37 @@ func (s *Server) AuthCallbackHandler() http.HandlerFunc {
 	}
 }
 
+// LoginHandler logs a user in
+func (s *Server) LoginHandler(providerName string) http.HandlerFunc {
+	p, _ := config.GetProvider(providerName)
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := s.logger(r, "Login", "default", "Handling login")
+		logger.Info("Explicit user login")
+
+		// Calculate and validate redirect
+		redirect := GetRedirectURI(r)
+		redirectURL, err := ValidateLoginRedirect(r, redirect)
+		if err != nil {
+			logger.WithFields(logrus.Fields{
+				"received_redirect": redirect,
+			}).Warnf("Invalid redirect in login: %v", err)
+			http.Error(w, "Invalid redirect: "+err.Error(), 400)
+			return
+		}
+
+		// Get user
+		userinfo := GetUserinfoFromCookie(r)
+		if userinfo != nil { // Already logged in
+			http.Redirect(w, r, redirectURL.String(), http.StatusTemporaryRedirect)
+			return
+		}
+
+		// Login
+		s.authRedirect(logger, w, r, p, redirectURL.String(), true)
+	}
+}
+
 // LogoutHandler logs a user out
 func (s *Server) LogoutHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -356,6 +370,12 @@ func (s *Server) LogoutHandler() http.HandlerFunc {
 		}
 
 		http.Redirect(w, r, redirectURL.String(), http.StatusTemporaryRedirect)
+	}
+}
+
+func (s *Server) healthCheckHandler() http.HandlerFunc {
+	return func(rw http.ResponseWriter, req *http.Request) {
+		rw.WriteHeader(http.StatusOK)
 	}
 }
 
