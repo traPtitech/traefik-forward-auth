@@ -14,7 +14,7 @@ Read below to see major (breaking) changes from upstream.
 Further customization notes:
 
 - Allows "soft-auth" mode instead of the usual "auth" mode which forces authentication.
-    - Requests with our header will be passed with the user header, while other requests will also be passed through with empty user header value (the default user header value can be configured).
+    - Requests with our header will be passed with the user header, while other requests will also be passed through with empty user header value.
     - Requests to path `/_oauth/login` will be forcefully authenticated just like "auth" mode.
 - Now builds against traefik v3.
     - Rule syntax now follows those of traefik v3.
@@ -22,6 +22,12 @@ Further customization notes:
     - Allows ease parsing and configuration from env, yaml, json, or toml files.
     - Instead, no longer accepts configurations from CLI args.
     - Several field names have been changed alongside to be more consistent overall.
+- Use JWT (Json Web Token) instead of re-inventing the original token format.
+- Dynamic mapping of userinfo values to header values.
+- More expressive traefik-like language to replace the 'whitelist' and email 'domain' user filtering.
+
+Despite quite a few breaking changes from upstream, it still supports the same basic usage,
+and even more advanced dynamic usages.
 
 ### Releases
 
@@ -66,11 +72,9 @@ It seems to be a better bet to match against the `X-Forwarded-For` header.
   - [Advanced](#advanced)
   - [Provider Setup](#provider-setup)
 - [Configuration](#configuration)
-  - [Overview](#overview)
   - [Option Details](#option-details)
 - [Concepts](#concepts)
   - [Forwarded Headers](#forwarded-headers)
-  - [User Restriction](#user-restriction)
   - [Applying Authentication](#applying-authentication)
     - [Global Authentication](#global-authentication)
     - [Selective Ingress Authentication in Kubernetes](#selective-ingress-authentication-in-kubernetes)
@@ -197,8 +201,8 @@ They are parsed in the following precedence order.
 
   The host should be specified without protocol or path, for example:
 
-   ```
-   --auth-host="auth.example.com"
+   ```yaml
+   auth-host: "auth.example.com"
    ```
 
    For more details, please also read the [Auth Host Mode](#auth-host-mode), operation mode in the concepts section.
@@ -209,17 +213,19 @@ They are parsed in the following precedence order.
 
    Used to specify the path to a configuration file, can be set multiple times, each file will be read in the order they are passed. Options should be set in an INI format, for example:
 
-   ```
-   url-path = _oauthpath
+   ```yaml
+   url-path: _oauthpath
    ```
 
-- `cookie-domain`
+- `cookie-domains`
 
-  When set, if a user successfully completes authentication, then if the host of the original request requiring authentication is a subdomain of a given cookie domain, then the authentication cookie will be set for the higher level cookie domain. This means that a cookie can allow access to multiple subdomains without re-authentication. Can be specificed multiple times.
+  When set, if a user successfully completes authentication, then if the host of the original request requiring authentication is a subdomain of a given cookie domain, then the authentication cookie will be set for the higher level cookie domain. This means that a cookie can allow access to multiple subdomains without re-authentication. Can be specified multiple times.
 
    For example:
-   ```
-   --cookie-domain="example.com"  --cookie-domain="test.org"
+   ```yaml
+   cookie-domains:
+     - "example.com"
+     - "test.org"
    ```
 
    For example, if the cookie domain `test.com` has been set, and a request comes in on `app1.test.com`, following authentication the auth cookie will be set for the whole `test.com` domain. As such, if another request is forwarded for authentication from `app2.test.com`, the original cookie will be sent and so the request will be allowed without further authentication.
@@ -242,41 +248,17 @@ They are parsed in the following precedence order.
 
    Default: `_forward_auth_csrf`
 
-- `default-action`
+- `provider`
 
-   Specifies the behavior when a request does not match any [rules](#rules). Valid options are `auth`, `soft-auth`, or `allow`.
-
-   Default: `auth` (i.e. all requests require authentication)
-
-- `default-provider`
-
-   Set the default provider to use for authentication, this can be overridden within [rules](#rules). Valid options are currently `google` or `oidc`.
+   Set the provider to use for authentication. Valid options are currently `google`, `oidc`, or `generic-oauth`.
 
    Default: `google`
-
-- `domain`
-
-   When set, only users matching a given domain will be permitted to access.
-
-   For example, setting `--domain=example.com --domain=test.org` would mean that only users from example.com or test.org will be permitted. So thom@example.com would be allowed but thom@another.com would not.
-
-   For more details, please also read [User Restriction](#user-restriction) in the concepts section.
 
 - `lifetime`
 
    How long a successful authentication session should last, in seconds.
 
    Default: `43200` (12 hours)
-
-- `match-whitelist-or-domain`
-
-   When enabled, users will be permitted if they match *either* the `whitelist` or `domain` parameters.
-
-   This will be enabled by default in v3, but is disabled by default in v2 to maintain backwards compatibility.
-
-   Default: `false`
-
-   For more details, please also read [User Restriction](#user-restriction) in the concepts section.
 
 - `url-path`
 
@@ -290,17 +272,9 @@ They are parsed in the following precedence order.
 
    Used to sign cookies authentication, should be a random (e.g. `openssl rand -hex 16`)
 
-- `whitelist`
+- `rules`
 
-   When set, only specified users will be permitted.
-
-   For example, setting `--whitelist=thom@example.com --whitelist=alice@example.com` would mean that only those two exact users will be permitted. So thom@example.com would be allowed but john@example.com would not.
-
-   For more details, please also read [User Restriction](#user-restriction) in the concepts section.
-
-- `rule`
-
-   Specify selective authentication rules. Rules are specified in the following format: `rule.<name>.<param>=<value>`
+   Specify selective authentication rules. Rules are specified in the following format: `rules.<name>.<param>: <value>`
 
    - `<name>` can be any string and is only used to group rules together
    - `<param>` can be:
@@ -308,11 +282,7 @@ They are parsed in the following precedence order.
            - `auth` (default)
            - `soft-auth`
            - `allow`
-       - `domains` - optional, same usage as [`domain`](#domain)
-       - `provider` - same usage as [`default-provider`](#default-provider), supported values:
-           - `google`
-           - `oidc`
-       - `rule` - a rule to match a request, this uses traefik's v3 rule parser for which you can find the documentation here: https://docs.traefik.io/v3.0/routing/routers/#rule, supported values are summarised here:
+       - `route-rule` - a rule to match a request, this uses traefik's v3 rule parser for which you can find the documentation here: https://docs.traefik.io/v3.0/routing/routers/#rule, supported values are summarised here:
            - ``Header(`key`, `value`)``
            - ``HeaderRegexp(`key`, `regexp`)``
            - ``Host(`example.com`)``
@@ -322,30 +292,56 @@ They are parsed in the following precedence order.
            - ``PathRegexp(`^/articles/{category}/[0-9]+$`)``
            - ``PathPrefix(`/products/`)``
            - ``Query(`foo=bar`)``
-       - `whitelist` - optional, same usage as whitelist`](#whitelist)
+       - `priority` - route-rule's priority, working similarly to traefik v3 router rules. Higher number means the rule is checked earlier. Defaults to string length of the route-rule.
+       - `auth-rule` - traefik router-like language to express whether a user is allowed to pass *after* authenticating the user. Headers will be set *only when* this AuthRule passes. Defaults to `True()` which passes all users. Allowed functions are:
+         - ``True()`` - Always passes.
+         - ``In(`path`, `value1`, `value2`, ...)`` - Passes when the userinfo is one of the values.
+         - ``Regexp(`path`, `pattern`)`` - Passes when the userinfo matches the pattern.
 
    For example:
    ```
    # Allow requests that being with `/api/public` and contain the `Content-Type` header with a value of `application/json`
-   rule.1.action = allow
-   rule.1.rule = PathPrefix(`/api/public`) && Header(`Content-Type`, `application/json`)
+   rules.1.action = allow
+   rules.1.route-rule = PathPrefix(`/api/public`) && Header(`Content-Type`, `application/json`)
 
    # Allow requests that have the exact path `/public`
-   rule.two.action = allow
-   rule.two.rule = Path(`/public`)
-
-   # Use OpenID Connect provider (must be configured) for requests that begin with `/github`
-   rule.oidc.action = auth
-   rule.oidc.provider = oidc
-   rule.oidc.rule = PathPrefix(`/github`)
+   rules.two.action = allow
+   rules.two.route-rule = Path(`/public`)
 
    # Allow jane@example.com to `/janes-eyes-only`
-   rule.two.action = allow
-   rule.two.rule = Path(`/janes-eyes-only`)
-   rule.two.whitelist = jane@example.com
+   rules.two.action = allow
+   rules.two.route-rule = Path(`/janes-eyes-only`)
+   rules.two.auth-rule = In(`email`, `jane@example.com`)
    ```
 
-   Note: It is possible to break your redirect flow with rules, please be careful not to create an `allow` rule that matches your redirect_uri unless you know what you're doing. This limitation is being tracked in in #101 and the behaviour will change in future releases.
+   Note: It is possible to break your redirect flow with rules, please be careful not to create an `allow` rule that matches your redirect_uri unless you know what you're doing. This limitation is being tracked in #101 and the behaviour will change in future releases.
+
+   Default: `rules.default.action: auth`, `rules.default.priority: -10000`
+
+- `rules.default.action`
+
+  Specifies the behavior when a request does not match any additionally defined `rules`. Valid options are `auth`, `soft-auth`, or `allow`.
+
+  Default: `auth` (i.e. all requests require authentication)
+
+- `headers`
+
+   Dynamically specify which userinfo values to map into passed headers. Has a similar syntax to `rules`: `headers.<name>.<param>: <value>`.
+
+   - `<name>` can be any string and is only used to group config together.
+   - `<param>` can be:
+      - `name` - Name of the header to pass on.
+      - `source` - Dot notation path of userinfo values to source the header value from.
+
+   Default: `headers.default.name: X-Forwarded-User`, `headers.default.source: email`
+
+- `info-fields`
+
+   List of dot notation of userinfo fields to save to the token.
+   Note that fields not specified here will NOT be saved to the token to avoid bloating token size.
+   Since traefik-forward-auth is a stateless application, fields not specified here cannot be referenced from `rules.<name>.auth-rule` or `headers.<name>.source`.
+
+   Default: `email`
 
 - `trusted-ip-address`
 
@@ -353,21 +349,12 @@ They are parsed in the following precedence order.
   from a trusted network are considered authenticated and are never redirected to an OAuth IDP. The option can be used
   multiple times to add many trusted address ranges.
 
-  * `--trusted-ip-address=2.3.4.5` adds a single IP (`2.3.4.5`) as a trusted IP.
-  * `--trusted-ip-address=30.1.0.0/16` adds the address range from `30.1.0.1` to `30.1.255.254` as a trusted range
+  * `trusted-ip-address: 2.3.4.5` adds a single IP (`2.3.4.5`) as a trusted IP.
+  * `trusted-ip-address: 30.1.0.0/16` adds the address range from `30.1.0.1` to `30.1.255.254` as a trusted range
 
   The list of trusted networks is initially empty.
 
 ## Concepts
-
-### User Restriction
-
-You can restrict who can login with the following parameters:
-
-* `domain` - Use this to limit logins to a specific domain, e.g. test.com only
-* `whitelist` - Use this to only allow specific users to login e.g. thom@test.com only
-
-Note, if you pass both `whitelist` and `domain`, then the default behaviour is for only `whitelist` to be used and `domain` will be effectively ignored. You can allow users matching *either* `whitelist` or `domain` by passing the `match-whitelist-or-domain` parameter (this will be the default behaviour in v3). If you set `domains` or `whitelist` on a rule, the global configuration is ignored.
 
 ### Forwarded Headers
 
@@ -442,14 +429,16 @@ See the examples directory for more examples.
 
 You can also leverage the `rules` config to selectively apply authentication via traefik-forward-auth. For example if you enabled global authentication by enabling forward authentication for an entire entrypoint, you can still exclude some patterns from requiring authentication:
 
-```ini
-# Allow requests to 'dash.example.com'
-rule.1.action = allow
-rule.1.rule = Host(`dash.example.com`)
-
-# Allow requests to `app.example.com/public`
-rule.two.action = allow
-rule.two.rule = Host(`app.example.com`) && Path(`/public`)
+```yaml
+rule:
+  # Allow requests to 'dash.example.com'
+  "1":
+    action: allow
+    rule: Host(`dash.example.com`)
+  # Allow requests to `app.example.com/public`
+  two:
+    action: allow
+    rule: Host(`app.example.com`) && Path(`/public`)
 ```
 
 ### Operation Modes
@@ -493,13 +482,6 @@ Two criteria must be met for an `auth-host` to be used:
 2. `auth-host` is also subdomain of same `cookie-domain`
 
 Please note: For Auth Host mode to work, you must ensure that requests to your auth-host are routed to the traefik-forward-auth container, as demonstrated with the service labels in the [docker-compose-auth.yml](examples/traefik-v2/swarm/docker-compose-auth-host.yml) example and the [ingressroute resource](examples/traefik-v2/kubernetes/advanced-separate-pod/traefik-forward-auth/ingress.yaml) in a kubernetes example.
-
-### Logging in
-
-The service provides an endpoint to allow users to explicitly login.
-This is useful for routes in which the auth action is `soft-auth`.
-
-You can set `redirect` query parameter to redirect on login (defaults to `/`).
 
 ### Logging Out
 

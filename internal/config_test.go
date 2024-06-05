@@ -43,20 +43,31 @@ providers:
 	assert.False(c.InsecureCookie)
 	assert.Equal("_forward_auth", c.CookieName)
 	assert.Equal("_forward_auth_csrf", c.CSRFCookieName)
-	assert.Equal("auth", c.DefaultAction)
-	assert.Equal("google", c.DefaultProvider)
-	assert.Len(c.Domains, 0)
-	assert.Equal([]string{"X-Forwarded-User"}, c.HeaderNames)
+	assert.Equal("google", c.Provider)
 	assert.Equal(time.Second*time.Duration(43200), c.lifetimeDuration)
-	assert.False(c.MatchWhitelistOrDomain)
 	assert.Equal("/_oauth", c.URLPath)
-	assert.Equal("", c.SoftAuthUser)
-	assert.Len(c.Whitelist, 0)
-	assert.Equal(c.Port, 4181)
+	assert.Equal(4181, c.Port)
+	assert.Equal([]string{"email"}, c.InfoFields)
 
 	assert.Equal("select_account", c.Providers.Google.Prompt)
 
 	assert.Len(c.TrustedIPAddresses, 0)
+
+	assert.Equal(map[string]*Rule{
+		"default": {
+			Action:    "auth",
+			RouteRule: "PathPrefix(`/`)",
+			Priority:  -10000,
+			AuthRule:  "True()",
+		},
+	}, c.Rules)
+
+	assert.Equal(map[string]*Header{
+		"default": {
+			Name:   "X-Forwarded-User",
+			Source: "email",
+		},
+	}, c.Headers)
 }
 
 func TestConfigParseArgs(t *testing.T) {
@@ -76,10 +87,10 @@ port: 8000
 rules:
   "1":
     action: allow
-    rule: `+"PathPrefix(`/one`)"+`
+    route-rule: `+"PathPrefix(`/one`)"+`
   two:
     action: auth
-    rule: `+"Host(`two.com`) && Path(`/two`)"+`
+    route-rule: `+"Host(`two.com`) && Path(`/two`)"+`
 `)
 	c, err := NewConfig(tmpConfigFile)
 	require.Nil(t, err)
@@ -91,15 +102,23 @@ rules:
 
 	// Check rules
 	assert.Equal(map[string]*Rule{
+		"default": {
+			Action:    "auth",
+			RouteRule: "PathPrefix(`/`)",
+			Priority:  -10000,
+			AuthRule:  "True()",
+		},
 		"1": {
-			Action:   "allow",
-			Rule:     "PathPrefix(`/one`)",
-			Provider: "google",
+			Action:    "allow",
+			RouteRule: "PathPrefix(`/one`)",
+			Priority:  0,
+			AuthRule:  "True()",
 		},
 		"two": {
-			Action:   "auth",
-			Rule:     "Host(`two.com`) && Path(`/two`)",
-			Provider: "google",
+			Action:    "auth",
+			RouteRule: "Host(`two.com`) && Path(`/two`)",
+			Priority:  0,
+			AuthRule:  "True()",
 		},
 	}, c.Rules)
 }
@@ -126,12 +145,13 @@ providers:
   google:
     client-id: id
     client-secret: secret
-whitelist: test@test.com,test2@test2.com`)
+
+cookie-domains: test.com,test2.com`)
 	c, err := NewConfig(tmpConfigFile)
 	require.Nil(t, err)
 
-	expected1 := []string{"test@test.com", "test2@test2.com"}
-	assert.Equal(expected1, c.Whitelist, "should read legacy comma separated list whitelist")
+	expected1 := []string{"test.com", "test2.com"}
+	assert.Equal(expected1, c.CookieDomains, "should read comma separated list")
 }
 
 func TestConfigParseYaml(t *testing.T) {
@@ -151,10 +171,10 @@ url-path: one
 rules:
   "1":
     action: allow
-    rule: `+"PathPrefix(`/one`)"+`
+    route-rule: `+"PathPrefix(`/one`)"+`
   two:
     action: auth
-    rule: `+"Host(`two.com`) && Path(`/two`)"+`
+    route-rule: `+"Host(`two.com`) && Path(`/two`)"+`
 `)
 	c, err := NewConfig(tmpConfigFile)
 	require.Nil(t, err)
@@ -162,15 +182,23 @@ rules:
 	assert.Equal("yamlcookiename", c.CookieName, "should be read from yaml file")
 	assert.Equal("yamlcsrfcookiename", c.CSRFCookieName, "should be read from yaml file")
 	assert.Equal(map[string]*Rule{
+		"default": {
+			Action:    "auth",
+			RouteRule: "PathPrefix(`/`)",
+			Priority:  -10000,
+			AuthRule:  "True()",
+		},
 		"1": {
-			Action:   "allow",
-			Rule:     "PathPrefix(`/one`)",
-			Provider: "google",
+			Action:    "allow",
+			RouteRule: "PathPrefix(`/one`)",
+			Priority:  0,
+			AuthRule:  "True()",
 		},
 		"two": {
-			Action:   "auth",
-			Rule:     "Host(`two.com`) && Path(`/two`)",
-			Provider: "google",
+			Action:    "auth",
+			RouteRule: "Host(`two.com`) && Path(`/two`)",
+			Priority:  0,
+			AuthRule:  "True()",
 		},
 	}, c.Rules)
 }
@@ -186,8 +214,6 @@ func TestConfigParseEnvironment(t *testing.T) {
 	t.Setenv("PROVIDERS_GOOGLE_CLIENT_ID", "env_client_id")
 	t.Setenv("PROVIDERS_GOOGLE_CLIENT_SECRET", "very-secret")
 	t.Setenv("COOKIE_DOMAINS", "test1.com,example.org")
-	t.Setenv("DOMAINS", "test2.com,example.org")
-	t.Setenv("WHITELIST", "test3.com,example.org")
 
 	require.Equal(t, "env_cookie_name", os.Getenv("COOKIE_NAME"))
 
@@ -202,8 +228,6 @@ func TestConfigParseEnvironment(t *testing.T) {
 		"test1.com",
 		"example.org",
 	}, c.CookieDomains, "array variable should be read from environment COOKIE_DOMAINS")
-	assert.Equal([]string{"test2.com", "example.org"}, c.Domains, "array variable should be read from environment DOMAINS")
-	assert.Equal([]string{"test3.com", "example.org"}, c.Whitelist, "array variable should be read from environment WHITELIST")
 }
 
 func TestConfigTransformation(t *testing.T) {
@@ -227,6 +251,31 @@ lifetime: 200
 
 	assert.Equal(200, c.Lifetime)
 	assert.Equal(time.Second*time.Duration(200), c.lifetimeDuration, "lifetime should be read and converted to duration")
+}
+
+func TestConfigOverride(t *testing.T) {
+	t.Run("overrides default headers", func(t *testing.T) {
+		tmpConfigFile := prepareTmpFile("*.yaml", `
+secret: secret
+providers:
+  google:
+    client-id: id
+    client-secret: secret
+headers:
+  custom:
+    name: X-Custom
+    source: email
+`)
+		c, err := NewConfig(tmpConfigFile)
+		require.NoError(t, err)
+
+		assert.Equal(t, map[string]*Header{
+			"custom": {
+				Name:   "X-Custom",
+				Source: "email",
+			},
+		}, c.Headers)
+	})
 }
 
 func TestConfigValidate(t *testing.T) {
@@ -273,7 +322,7 @@ rules:
 		assert.Equal(t, "invalid rule action, must be \"auth\", \"soft-auth\", or \"allow\"", err.Error())
 	})
 
-	t.Run("invalid rule provider", func(t *testing.T) {
+	t.Run("invalid auth rule", func(t *testing.T) {
 		tmpConfigFile := prepareTmpFile("*.yaml", `
 secret: secret
 providers:
@@ -283,11 +332,61 @@ providers:
 rules:
   "1":
     action: auth
-    provider: bad2
+    auth-rule: Test()
 `)
 		_, err := NewConfig(tmpConfigFile)
 		assert.Error(t, err)
-		assert.Equal(t, "unknown provider: bad2", err.Error())
+	})
+
+	t.Run("invalid field ref from auth-rule", func(t *testing.T) {
+		tmpConfigFile := prepareTmpFile("*.yaml", `
+secret: secret
+providers:
+  google:
+    client-id: id
+    client-secret: secret
+rules:
+  "1":
+    action: auth
+    auth-rule: `+"In(`test-field`, `test-user`)"+`
+`)
+		_, err := NewConfig(tmpConfigFile)
+		assert.Error(t, err)
+	})
+
+	t.Run("invalid field ref from headers", func(t *testing.T) {
+		tmpConfigFile := prepareTmpFile("*.yaml", `
+secret: secret
+providers:
+  google:
+    client-id: id
+    client-secret: secret
+headers:
+  "1":
+    name: X-Forwarded-User-Test
+    source: test-field
+`)
+		_, err := NewConfig(tmpConfigFile)
+		assert.Error(t, err)
+	})
+
+	t.Run("valid field ref", func(t *testing.T) {
+		tmpConfigFile := prepareTmpFile("*.yaml", `
+secret: secret
+providers:
+  google:
+    client-id: id
+    client-secret: secret
+headers:
+  "1":
+    name: X-Forwarded-User-Test
+    source: test-field
+info-fields:
+  - test-field
+`)
+		c, err := NewConfig(tmpConfigFile)
+		assert.NoError(t, err)
+		assert.Equal(t, []string{"test-field"}, c.InfoFields)
 	})
 }
 

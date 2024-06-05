@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"github.com/traPtitech/traefik-forward-auth/internal/token"
 	"net/http"
 	"net/url"
 	"strings"
@@ -13,82 +14,6 @@ import (
 )
 
 // Request Validation
-
-var (
-	ErrCookieExpired = errors.New("cookie has expired")
-	// ErrInvalidSignature signifies one of:
-	// 1. mac signature was badly computed
-	// 2. mac signature was modified
-	// 3. signature format was changed between versions
-	// 4. secret was rotated
-	ErrInvalidSignature = errors.New("invalid mac signature")
-)
-
-// ValidateUser checks if the given user matches either a whitelisted
-// user, as defined by the "whitelist" config parameter. Or is part of
-// a permitted domain, as defined by the "domains" config parameter
-func ValidateUser(user, ruleName string) bool {
-	// Use global config by default
-	whitelist := config.Whitelist
-	domains := config.Domains
-
-	if rule, ok := config.Rules[ruleName]; ok {
-		// Override with rule config if found
-		if len(rule.Whitelist) > 0 || len(rule.Domains) > 0 {
-			whitelist = rule.Whitelist
-			domains = rule.Domains
-		}
-	}
-
-	// Do we have any validation to perform?
-	if len(whitelist) == 0 && len(domains) == 0 {
-		return true
-	}
-
-	// Email whitelist validation
-	if len(whitelist) > 0 {
-		if ValidateWhitelist(user, whitelist) {
-			return true
-		}
-
-		// If we're not matching *either*, stop here
-		if !config.MatchWhitelistOrDomain {
-			return false
-		}
-	}
-
-	// Domain validation
-	if len(domains) > 0 && ValidateDomains(user, domains) {
-		return true
-	}
-
-	return false
-}
-
-// ValidateWhitelist checks if the email is in whitelist
-func ValidateWhitelist(user string, whitelist []string) bool {
-	for _, whitelist := range whitelist {
-		if user == whitelist {
-			return true
-		}
-	}
-	return false
-}
-
-// ValidateDomains checks if the email matches a whitelisted domain
-func ValidateDomains(user string, domains []string) bool {
-	parts := strings.Split(user, "@")
-	if len(parts) < 2 {
-		return false
-	}
-	emailDomain := strings.ToLower(parts[1])
-	for _, domain := range domains {
-		if domain == emailDomain {
-			return true
-		}
-	}
-	return false
-}
 
 func GetRedirectURI(r *http.Request) string {
 	redirect := r.URL.Query().Get("redirect")
@@ -199,9 +124,12 @@ func useAuthDomain(r *http.Request) (bool, string) {
 // Cookie methods
 
 // MakeCookie creates an auth cookie
-func MakeCookie(r *http.Request, user string) *http.Cookie {
+func MakeCookie(r *http.Request, object any) (*http.Cookie, error) {
 	expires := cookieExpiry()
-	value := SignToken(user, expires.Unix())
+	value, err := token.SignToken(object, expires.Unix(), config.secretBytes)
+	if err != nil {
+		return nil, err
+	}
 
 	return &http.Cookie{
 		Name:     config.CookieName,
@@ -211,7 +139,7 @@ func MakeCookie(r *http.Request, user string) *http.Cookie {
 		HttpOnly: true,
 		Secure:   !config.InsecureCookie,
 		Expires:  expires,
-	}
+	}, nil
 }
 
 // ClearCookie clears the auth cookie

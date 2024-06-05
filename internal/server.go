@@ -1,8 +1,9 @@
 package tfa
 
 import (
-	"errors"
 	"fmt"
+	"github.com/traPtitech/traefik-forward-auth/internal/authrule"
+	"github.com/traPtitech/traefik-forward-auth/internal/token"
 	"github.com/traefik/traefik/v3/pkg/middlewares/requestdecorator"
 	"net/http"
 	"net/url"
@@ -45,53 +46,58 @@ func (s *Server) buildRoutes() {
 
 	// Let's build a router
 	const syntax = "v3"
+	addRoute := func(rule string, h http.Handler) {
+		lo.Must0(s.muxer.AddRoute(rule, syntax, len(rule), h))
+	}
+
 	for name, rule := range config.Rules {
 		// err should not occur because rule is validated beforehand
-		lo.Must0(s.muxer.AddRoute(rule.Rule, syntax, 1, s.Handler(rule.Action, rule.Provider, name)))
+		priority := lo.Ternary(rule.Priority == 0, len(rule.RouteRule), rule.Priority)
+		authPred := lo.Must(authrule.NewAuthRule(rule.AuthRule, config.InfoFields))
+		handler := s.Handler(rule.Action, config.Provider, name, authPred)
+		lo.Must0(s.muxer.AddRoute(rule.RouteRule, syntax, priority, handler))
 	}
 
 	// Add callback handler
 	pathToMatcher := func(path string) string { return fmt.Sprintf("Path(`%s`)", path) }
-	lo.Must0(s.muxer.AddRoute(pathToMatcher(config.URLPath), syntax, 1, s.AuthCallbackHandler()))
+	addRoute(pathToMatcher(config.URLPath), s.AuthCallbackHandler())
 
-	// Add login / logout handler
-	lo.Must0(s.muxer.AddRoute(pathToMatcher(config.URLPath+"/login"), syntax, 1, s.LoginHandler(config.DefaultProvider)))
-	lo.Must0(s.muxer.AddRoute(pathToMatcher(config.URLPath+"/logout"), syntax, 1, s.LogoutHandler()))
+	// Add explicit logout handler
+	addRoute(pathToMatcher(config.URLPath+"/logout"), s.LogoutHandler())
 
 	// Add health check handler
-	lo.Must0(s.muxer.AddRoute(pathToMatcher("/healthz"), syntax, 1, http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+	addRoute(pathToMatcher("/healthz"), http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 		rw.WriteHeader(http.StatusOK)
-	})))
-
-	// Add a default handler
-	s.muxer.SetDefaultHandler(s.Handler(config.DefaultAction, config.DefaultProvider, "default"))
+	}))
 }
 
 // RootHandler Overwrites the request method, host and URL with those from the
-// forwarded request so it's correctly routed by mux
+// forwarded request so that it's correctly routed by mux
 func (s *Server) RootHandler(w http.ResponseWriter, r *http.Request) {
-	// Modify request
+	// Modify request if we're acting as forward auth middleware
 	// https://doc.traefik.io/traefik/v3.0/middlewares/http/forwardauth/
-	r.Method = r.Header.Get("X-Forwarded-Method")
-	r.Host = r.Header.Get("X-Forwarded-Host")
-
-	// Read URI from header if we're acting as forward auth middleware
-	if _, ok := r.Header["X-Forwarded-Uri"]; ok {
-		r.URL, _ = url.Parse(r.Header.Get("X-Forwarded-Uri"))
+	if v := r.Header.Get("X-Forwarded-Method"); v != "" {
+		r.Method = v
+	}
+	if v := r.Header.Get("X-Forwarded-Host"); v != "" {
+		r.Host = v
+	}
+	if v := r.Header.Get("X-Forwarded-Uri"); v != "" {
+		r.URL, _ = url.Parse(v)
 	}
 
 	// Pass to mux
 	s.reqDecorator.ServeHTTP(w, r, s.muxer.ServeHTTP)
 }
 
-func (s *Server) Handler(action, providerName, rule string) http.HandlerFunc {
+func (s *Server) Handler(action, providerName, rule string, authPred authrule.Predicate) http.HandlerFunc {
 	switch action {
 	case "allow":
 		return s.allowHandler(rule)
 	case "soft-auth":
-		return s.softAuthHandler(providerName, rule)
+		return s.softAuthHandler(providerName, rule, authPred)
 	case "auth":
-		return s.hardAuthHandler(providerName, rule)
+		return s.hardAuthHandler(providerName, rule, authPred)
 	default:
 		panic("unknown action " + action)
 	}
@@ -105,35 +111,40 @@ func (s *Server) allowHandler(rule string) http.HandlerFunc {
 	}
 }
 
-func GetUserFromCookie(r *http.Request) (*string, error) {
+func GetUserinfoFromCookie(r *http.Request) any {
 	// Get auth cookie
 	c, err := r.Cookie(config.CookieName)
 	if err != nil {
-		return nil, nil
+		return nil
 	}
 
 	// Validate cookie
-	user, err := verifyToken(c.Value)
+	object, err := token.VerifyToken(c.Value, config.secretBytes)
 	if err != nil {
-		if errors.Is(err, ErrCookieExpired) {
-			return nil, nil
-		}
-		if errors.Is(err, ErrInvalidSignature) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("invalid cookie: %w", err)
+		return nil
 	}
-	return &user, nil
+	return object
 }
 
-func (s *Server) authHandler(providerName, rule string, soft bool) http.HandlerFunc {
+// softAuthHandler Soft-authenticates requests
+func (s *Server) softAuthHandler(providerName, rule string, authPred authrule.Predicate) http.HandlerFunc {
+	return s.authHandler(providerName, rule, true, authPred)
+}
+
+// hardAuthHandler Authenticates requests
+func (s *Server) hardAuthHandler(providerName, rule string, authPred authrule.Predicate) http.HandlerFunc {
+	return s.authHandler(providerName, rule, false, authPred)
+}
+
+func (s *Server) authHandler(providerName, rule string, soft bool, authPred authrule.Predicate) http.HandlerFunc {
 	p, _ := config.GetProvider(providerName)
 
 	var unauthorized func(w http.ResponseWriter)
 	if soft {
 		unauthorized = func(w http.ResponseWriter) {
-			for _, headerName := range config.HeaderNames {
-				w.Header().Set(headerName, config.SoftAuthUser)
+			// Set empty values before passing the request so that they cannot be impersonated
+			for _, h := range config.Headers {
+				w.Header().Set(h.Name, "")
 			}
 			w.WriteHeader(200)
 		}
@@ -143,7 +154,6 @@ func (s *Server) authHandler(providerName, rule string, soft bool) http.HandlerF
 		}
 	}
 
-	forceLogin := s.LoginHandler(providerName)
 	forceLogout := s.LogoutHandler()
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -164,15 +174,6 @@ func (s *Server) authHandler(providerName, rule string, soft bool) http.HandlerF
 			}
 		}
 
-		// Explicit login route on each host (only makes sense for "soft-auth" mode)
-		if soft {
-			isForceLogin := strings.HasPrefix(r.Header.Get("X-Forwarded-Uri"), config.URLPath+"/login")
-			if isForceLogin {
-				forceLogin(w, r)
-				return
-			}
-		}
-
 		// Explicit logout route on each host
 		isForceLogout := strings.HasPrefix(r.Header.Get("X-Forwarded-Uri"), config.URLPath+"/logout")
 		if isForceLogout {
@@ -181,13 +182,8 @@ func (s *Server) authHandler(providerName, rule string, soft bool) http.HandlerF
 		}
 
 		// Get user from cookie
-		user, err := GetUserFromCookie(r)
-		if err != nil {
-			logger.WithField("error", err).Warn("invalid user")
-			unauthorized(w)
-			return
-		}
-		if user == nil {
+		userinfo := GetUserinfoFromCookie(r)
+		if userinfo == nil {
 			if soft {
 				unauthorized(w)
 				return
@@ -197,31 +193,27 @@ func (s *Server) authHandler(providerName, rule string, soft bool) http.HandlerF
 			}
 		}
 
+		// Check that the token has expected fields
+		for _, field := range config.InfoFields {
+			token.GetPathStr(userinfo, field)
+		}
+
 		// Validate user
-		valid := ValidateUser(*user, rule)
+		valid := authPred(userinfo)
 		if !valid {
-			logger.WithField("user", escapeNewlines(*user)).Warn("Invalid user")
+			logger.WithField("userinfo", escapeNewlines(fmt.Sprintf("%v", userinfo))).Warn("Invalid user")
 			unauthorized(w)
 			return
 		}
 
 		// Valid request
 		logger.Debug("Allowing valid request")
-		for _, headerName := range config.HeaderNames {
-			w.Header().Set(headerName, *user)
+		for _, h := range config.Headers {
+			str, _ := token.GetPathStr(userinfo, h.Source)
+			w.Header().Set(h.Name, str)
 		}
 		w.WriteHeader(200)
 	}
-}
-
-// softAuthHandler Soft-authenticates requests
-func (s *Server) softAuthHandler(providerName, rule string) http.HandlerFunc {
-	return s.authHandler(providerName, rule, true)
-}
-
-// hardAuthHandler Authenticates requests
-func (s *Server) hardAuthHandler(providerName, rule string) http.HandlerFunc {
-	return s.authHandler(providerName, rule, false)
 }
 
 // AuthCallbackHandler Handles auth callback request
@@ -299,72 +291,44 @@ func (s *Server) AuthCallbackHandler() http.HandlerFunc {
 		}
 
 		// Exchange code for token
-		token, err := p.ExchangeCode(redirectUri(r), r.URL.Query().Get("code"))
+		oauthToken, err := p.ExchangeCode(redirectUri(r), r.URL.Query().Get("code"))
 		if err != nil {
 			logger.WithField("error", err).Error("Code exchange failed with provider")
 			http.Error(w, "Service unavailable", 503)
 			return
 		}
 
-		// Get user
-		user, err := p.GetUser(token, config.UserIDPath)
+		// Get userinfo
+		userinfo, err := p.GetUser(oauthToken)
 		if err != nil {
 			logger.WithField("error", err).Error("Error getting user")
 			http.Error(w, "Service unavailable", 503)
 			return
 		}
 
+		// Limit fields from raw userinfo
+		userinfo, err = token.LimitFields(userinfo, config.InfoFields)
+		if err != nil {
+			logger.WithField("error", err).Error("Error limiting fields from raw userinfo")
+			http.Error(w, "Internal server error", 500)
+			return
+		}
+
 		// Generate cookie
-		http.SetCookie(w, MakeCookie(r, user))
+		cookie, err := MakeCookie(r, userinfo)
+		if err != nil {
+			logger.WithField("error", err).Error("Error making cookie")
+			http.Error(w, "Internal server error", 500)
+		}
+		http.SetCookie(w, cookie)
 		logger.WithFields(logrus.Fields{
 			"provider": providerName,
 			"redirect": redirect,
-			"user":     user,
+			"userinfo": userinfo,
 		}).Info("Successfully generated auth cookie, redirecting user.")
 
 		// Redirect
 		http.Redirect(w, r, redirectURL.String(), http.StatusTemporaryRedirect)
-	}
-}
-
-// LoginHandler logs a user in
-func (s *Server) LoginHandler(providerName string) http.HandlerFunc {
-	p, _ := config.GetProvider(providerName)
-
-	return func(w http.ResponseWriter, r *http.Request) {
-		logger := s.logger(r, "Login", "default", "Handling login")
-		logger.Info("Explicit user login")
-
-		// Calculate and validate redirect
-		redirect := GetRedirectURI(r)
-		redirectURL, err := ValidateLoginRedirect(r, redirect)
-		if err != nil {
-			logger.WithFields(logrus.Fields{
-				"received_redirect": redirect,
-			}).Warnf("Invalid redirect in login: %v", err)
-			http.Error(w, "Invalid redirect: "+err.Error(), 400)
-			return
-		}
-
-		// Get user
-		user, err := GetUserFromCookie(r)
-		if err != nil {
-			logger.WithField("error", err).Warn("invalid user")
-			http.Error(w, "Invalid cookie", 400)
-			return
-		}
-		if user != nil { // Already logged in
-			if redirectURL != nil {
-				http.Redirect(w, r, redirectURL.String(), http.StatusTemporaryRedirect)
-				return
-			} else {
-				w.WriteHeader(200)
-				return
-			}
-		}
-
-		// Login
-		s.authRedirect(logger, w, r, p, redirectURL.String(), true)
 	}
 }
 

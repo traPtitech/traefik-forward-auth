@@ -11,6 +11,8 @@ import (
 
 // Utilities
 
+type m = map[string]any
+
 type OAuthServer struct {
 	t    *testing.T
 	url  *url.URL

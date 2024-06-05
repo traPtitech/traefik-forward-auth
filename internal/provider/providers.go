@@ -2,11 +2,8 @@ package provider
 
 import (
 	"context"
-	"fmt"
-	"io"
 	// "net/url"
 
-	"github.com/Jeffail/gabs/v2"
 	"golang.org/x/oauth2"
 )
 
@@ -22,25 +19,12 @@ type Provider interface {
 	Name() string
 	GetLoginURL(redirectURI, state string, allowPrompt bool) string
 	ExchangeCode(redirectURI, code string) (string, error)
-	GetUser(token, UserPath string) (string, error)
+	GetUser(token string) (any, error)
 	Setup() error
 }
 
 type token struct {
 	Token string `json:"access_token"`
-}
-
-// GetUser extracts a UserID located at the (dot notation) path (UserPath) in the json io.Reader of the UserURL
-func GetUser(r io.Reader, UserPath string) (string, error) {
-	json, err := gabs.ParseJSONBuffer(r)
-	if err != nil {
-		return "", err
-	}
-
-	if !json.ExistsP(UserPath) {
-		return "", fmt.Errorf("no such user path: '%s' in the UserURL response: %s", UserPath, string(json.Bytes()))
-	}
-	return fmt.Sprintf("%v", json.Path(UserPath).Data()), nil
 }
 
 // OAuthProvider is a provider using the oauth2 library

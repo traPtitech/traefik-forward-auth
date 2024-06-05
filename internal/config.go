@@ -3,7 +3,9 @@ package tfa
 import (
 	"errors"
 	"fmt"
+	"github.com/samber/lo"
 	"github.com/spf13/viper"
+	"github.com/traPtitech/traefik-forward-auth/internal/authrule"
 	"net"
 	"os"
 	"strings"
@@ -33,38 +35,34 @@ type Config struct {
 	CookieName string `mapstructure:"cookie-name"`
 	// CSRFCookieName defines CSRF cookie name to use.
 	CSRFCookieName string `mapstructure:"csrf-cookie-name"`
-	// DefaultAction defines default action for providers.
-	DefaultAction string `mapstructure:"default-action"`
-	// DefaultProvider defines default provider.
-	// 	Allowed values: "google", "oidc", "generic-oauth"
-	DefaultProvider string `mapstructure:"default-provider"`
-	// Domains defines to only allow given email domains. Comma separated.
-	Domains []string `mapstructure:"domains"`
-	// HeaderNames define user header names. Comma separated.
-	HeaderNames []string `mapstructure:"header-names"`
 	// Lifetime defines cookie lifetime in seconds.
 	Lifetime int `mapstructure:"lifetime"`
-	// MatchWhitelistOrDomain allows users that match *either* whitelist or domain.
-	MatchWhitelistOrDomain bool `mapstructure:"match-whitelist-or-domain"`
 	// URLPath defines callback URL path.
 	URLPath string `mapstructure:"url-path"`
-	// Secret defines secret used for signing (required).
+	// Secret defines secret used for signing a token (required).
 	Secret string `mapstructure:"secret"`
-	// SoftAuthUser defines username used in header if unauthorized with soft-auth action.
-	SoftAuthUser string `mapstructure:"soft-auth-user"`
-	// UserIDPath is dot notation path of a UserID for use with whitelist and user header names (default: X-Forwarded-Auth).
-	UserIDPath string `mapstructure:"user-id-path"`
-	// Whitelist only allows given UserID. Comma separated.
-	Whitelist []string `mapstructure:"whitelist"`
 	// TrustedIPAddresses define list of trusted IP addresses or IP networks (in CIDR notation) that are considered authenticated. Comma separated.
 	TrustedIPAddresses []string `mapstructure:"trusted-ip-addresses"`
 	// Port defines port to listen on.
 	Port int `mapstructure:"port"`
+	// InfoFields define dot notation of userinfo fields to save to the token.
+	// Note that fields not specified here will not be saved to the token.
+	// Since traefik-forward-auth is a stateless application, fields not specified here cannot be referenced from
+	// `rules.<name>.auth-rule` or `headers.<name>.source`.
+	InfoFields []string `mapstructure:"info-fields"`
 
+	// Provider selects provider to use.
+	// 	Allowed values: "google", "oidc", "generic-oauth"
+	Provider string `mapstructure:"provider"`
+	// Providers define auth providers.
 	Providers provider.Providers `mapstructure:"providers"`
-	Rules     map[string]*Rule   `mapstructure:"rules"`
+	// Rules define routing and auth mode rules.
+	Rules map[string]*Rule `mapstructure:"rules"`
+	// Headers map userinfo sources and header names to pass on.
+	Headers map[string]*Header `mapstructure:"headers"`
 
 	// Filled during transformations
+	secretBytes       []byte
 	lifetimeDuration  time.Duration
 	trustedIPNetworks []*net.IPNet
 }
@@ -85,18 +83,25 @@ func init() {
 
 	viper.SetDefault("cookie-name", "_forward_auth")
 	viper.SetDefault("csrf-cookie-name", "_forward_auth_csrf")
-	viper.SetDefault("default-action", "auth")
-	viper.SetDefault("default-provider", "google")
-	viper.SetDefault("header-names", "X-Forwarded-User")
 	viper.SetDefault("lifetime", "43200")
 	viper.SetDefault("url-path", "/_oauth")
 	viper.SetDefault("user-id-path", "email")
 	viper.SetDefault("port", "4181")
+	viper.SetDefault("info-fields", "email")
 
+	viper.SetDefault("provider", "google")
 	viper.SetDefault("providers.google.prompt", "select_account")
 	viper.SetDefault("providers.oidc.scopes", "profile,email")
 	viper.SetDefault("providers.generic-oauth.token-style", "header")
 	viper.SetDefault("providers.generic-oauth.scopes", "profile,email")
+
+	viper.SetDefault("rules.default.action", "auth")
+	viper.SetDefault("rules.default.route-rule", "")
+	viper.SetDefault("rules.default.priority", -10000)
+	viper.SetDefault("rules.default.auth-rule", "")
+
+	viper.SetDefault("headers.default.name", "X-Forwarded-User")
+	viper.SetDefault("headers.default.source", "email")
 }
 
 // NewGlobalConfig creates a new global config
@@ -141,11 +146,9 @@ func (c *Config) setup() error {
 	if len(c.Secret) == 0 {
 		return errors.New("\"secret\" option must be set")
 	}
-	if len(c.HeaderNames) == 0 {
-		return errors.New("\"header-names\" option must be set")
-	}
 
 	// Field transformations
+	c.secretBytes = []byte(c.Secret)
 	if len(c.URLPath) > 0 && c.URLPath[0] != '/' {
 		c.URLPath = "/" + c.URLPath
 	}
@@ -155,15 +158,33 @@ func (c *Config) setup() error {
 		return err
 	}
 
-	// Setup default provider
-	err := c.setupProvider(c.DefaultProvider)
+	// If default rule was overridden, set it up
+	if _, ok := c.Rules["default"]; !ok {
+		c.Rules["default"] = &Rule{
+			Action:    "auth",
+			RouteRule: "",
+			Priority:  -10000,
+			AuthRule:  "",
+		}
+	}
+
+	// Setup provider
+	err := c.setupProvider(c.Provider)
 	if err != nil {
 		return err
 	}
 
 	// Setup rules and corresponding providers
 	for _, rule := range c.Rules {
-		err = rule.Setup(c)
+		err = rule.setup(c)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Setup header rules
+	for _, h := range c.Headers {
+		err = h.setup(c)
 		if err != nil {
 			return err
 		}
@@ -200,11 +221,10 @@ func (c *Config) parseTrustedNetworks() error {
 	return nil
 }
 
-// GetProvider returns the provider of the given name, if it has been
-// configured. Returns an error if the provider is unknown, or hasn't been configured
+// GetProvider returns the provider of the given name, if it has been selected.
+// Returns an error if the provider is unknown, or hasn't been selected.
 func (c *Config) GetProvider(name string) (provider.Provider, error) {
-	// Check the provider has been configured
-	if !c.isProviderConfigured(name) {
+	if !c.isSelectedProvider(name) {
 		return nil, fmt.Errorf("unconfigured provider: %s", name)
 	}
 
@@ -220,35 +240,8 @@ func (c *Config) GetProvider(name string) (provider.Provider, error) {
 	return nil, fmt.Errorf("unknown provider: %s", name)
 }
 
-func (c *Config) isProviderConfigured(name string) bool {
-	// Check default provider
-	if name == c.DefaultProvider {
-		return true
-	}
-
-	// Check rule providers
-	for _, rule := range c.Rules {
-		if name == rule.Provider {
-			return true
-		}
-	}
-
-	return false
-}
-
-func (c *Config) IsIPAddressAuthenticated(address string) (bool, error) {
-	addr := net.ParseIP(address)
-	if addr == nil {
-		return false, fmt.Errorf("invalid ip address: '%s'", address)
-	}
-
-	for _, n := range c.trustedIPNetworks {
-		if n.Contains(addr) {
-			return true, nil
-		}
-	}
-
-	return false, nil
+func (c *Config) isSelectedProvider(name string) bool {
+	return name == c.Provider
 }
 
 func (c *Config) setupProvider(name string) error {
@@ -266,32 +259,95 @@ func (c *Config) setupProvider(name string) error {
 	return nil
 }
 
+func (c *Config) IsIPAddressAuthenticated(address string) (bool, error) {
+	addr := net.ParseIP(address)
+	if addr == nil {
+		return false, fmt.Errorf("invalid ip address: '%s'", address)
+	}
+
+	for _, n := range c.trustedIPNetworks {
+		if n.Contains(addr) {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
 // Rule holds defined rules
 type Rule struct {
-	Action    string   `mapstructure:"action"`
-	Rule      string   `mapstructure:"rule"`
-	Provider  string   `mapstructure:"provider"`
-	Whitelist []string `mapstructure:"whitelist"`
-	Domains   []string `mapstructure:"domains"`
+	// Action defines auth action to take no this route.
+	// 	Allowed values: "allow", "soft-auth", "allow"
+	Action string `mapstructure:"action"`
+	// RouteRule defines router rule to determine which request matches this rule.
+	// Uses traefik v3 router syntax.
+	// https://doc.traefik.io/traefik/routing/routers/
+	//
+	// Defaults to: PathPrefix(`/`). (catch-all)
+	RouteRule string `mapstructure:"route-rule"`
+	// Priority defines router rule priority.
+	// Same rule as traefik v3 router applies.
+	// Note that 0 means the default, len(RouteRule).
+	Priority int `mapstructure:"priority"`
+	// AuthRule defines whether a user is allowed to pass *after* authenticating the user.
+	// Headers will be set *only when* this AuthRule passes.
+	//
+	// Similar syntax with traefik v3 router applies, but with different functions:
+	//
+	// 	- True() : Always passes.
+	// 	- In(`path`, `value1`, `value2`, ...) : Passes when the userinfo is one of the values.
+	// 	- Regexp(`path`, `pattern`) : Passes when the userinfo matches the pattern.
+	//
+	// "path" indicates dot notation path of userinfo object, retrieved via a provider.
+	//
+	// Example: Regexp(`email`, `^.+@example.com$`) && !In(`id`, `not-allowed-user`)
+	//
+	// Defaults to: True(). (catch-all)
+	AuthRule string `mapstructure:"auth-rule"`
 }
 
-// NewRule creates a new rule object
-func NewRule() *Rule {
-	return &Rule{
-		Action: "auth",
-	}
-}
-
-// Setup performs validation and setup.
-func (r *Rule) Setup(c *Config) error {
+// setup performs validation and setup.
+func (r *Rule) setup(c *Config) error {
 	if r.Action != "auth" && r.Action != "soft-auth" && r.Action != "allow" {
 		return errors.New("invalid rule action, must be \"auth\", \"soft-auth\", or \"allow\"")
 	}
 
-	// Set default provider on any rules where it's not specified
-	if r.Provider == "" {
-		r.Provider = c.DefaultProvider
+	// Set defaults (catch-all)
+	if r.RouteRule == "" {
+		r.RouteRule = "PathPrefix(`/`)"
+	}
+	if r.AuthRule == "" {
+		r.AuthRule = "True()"
 	}
 
-	return c.setupProvider(r.Provider)
+	// Validate rules
+	// Ensure it's not referring to non-existent keys from generated token
+	_, err := authrule.NewAuthRule(r.AuthRule, c.InfoFields)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+type Header struct {
+	// Name defines header name to pass extracted value to.
+	Name string `mapstructure:"name"`
+	// Source is dot notation path within userinfo object to extract value from. Nested value can be accessed via dot-separated key.
+	Source string `mapstructure:"source"`
+}
+
+// setup performs validation.
+func (h *Header) setup(c *Config) error {
+	if h.Name == "" {
+		return errors.New("header \"name\" must be set")
+	}
+	if h.Source == "" {
+		return errors.New("header value \"source\" must be set")
+	}
+	// Ensure it's not referring to non-existent keys from generated token
+	if !lo.Contains(c.InfoFields, h.Source) {
+		return fmt.Errorf("source \"%v\" of header \"%v\" is not going to be included in generated tokens - include it in \"info-fields\" config", h.Source, h.Name)
+	}
+	return nil
 }

@@ -1,11 +1,8 @@
 package provider
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 )
@@ -76,25 +73,24 @@ func (o *OIDC) ExchangeCode(redirectURI, code string) (string, error) {
 	// Extract ID token
 	rawIDToken, ok := token.Extra("id_token").(string)
 	if !ok {
-		return "", errors.New("Missing id_token")
+		return "", errors.New("missing id_token")
 	}
 
 	return rawIDToken, nil
 }
 
 // GetUser uses the given token and returns a complete provider.User object
-func (o *OIDC) GetUser(token, UserPath string) (string, error) {
+func (o *OIDC) GetUser(token string) (any, error) {
 	// Parse & Verify ID Token
 	idToken, err := o.verifier.Verify(o.ctx, token)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	// Extract custom claims
-	var claims json.RawMessage
+	var claims any
 	if err := idToken.Claims(&claims); err != nil {
-		return "", err
+		return nil, err
 	}
-
-	return GetUser(bytes.NewReader(claims), UserPath)
+	return claims, nil
 }
