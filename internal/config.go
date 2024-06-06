@@ -177,7 +177,7 @@ func (c *Config) setup() error {
 	}
 	if _, ok := c.Rules["health"]; !ok {
 		c.Rules["health"] = &Rule{
-			Action: "health",
+			Action: "allow",
 			// No overlay
 			RouteRule: "!HeaderRegexp(`X-Forwarded-Host`, `.+`) && Path(`/healthz`)",
 			Priority:  1,
@@ -302,7 +302,7 @@ func (c *Config) IsIPAddressAuthenticated(address string) (bool, error) {
 // Rule holds defined rules
 type Rule struct {
 	// Action defines auth action to take no this route.
-	// 	Allowed values: "allow", "soft-auth", "allow", "login", "logout", "callback", "health"
+	// 	Allowed values: "allow", "soft-auth", "allow", "login", "logout", "callback"
 	Action string `mapstructure:"action"`
 	// RouteRule defines router rule to determine which request matches this rule.
 	// Uses traefik v3 router syntax.
@@ -333,7 +333,7 @@ type Rule struct {
 
 // setup performs validation and setup.
 func (r *Rule) setup(c *Config) error {
-	allowed := []string{"auth", "soft-auth", "allow", "login", "logout", "callback", "health"}
+	allowed := []string{"auth", "soft-auth", "allow", "login", "logout", "callback"}
 	if !lo.Contains(allowed, r.Action) {
 		return fmt.Errorf("invalid rule action, must be one of: %v", allowed)
 	}

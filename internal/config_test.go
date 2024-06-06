@@ -69,7 +69,7 @@ providers:
 			AuthRule:  "True()",
 		},
 		"health": {
-			Action:    "health",
+			Action:    "allow",
 			RouteRule: "!HeaderRegexp(`X-Forwarded-Host`, `.+`) && Path(`/healthz`)",
 			Priority:  1,
 			AuthRule:  "True()",

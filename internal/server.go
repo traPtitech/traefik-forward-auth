@@ -88,8 +88,6 @@ func (s *Server) Handler(action, providerName, rule string, authPred authrule.Pr
 		return s.LoginHandler(providerName)
 	case "logout":
 		return s.LogoutHandler()
-	case "health":
-		return s.healthCheckHandler()
 	default:
 		panic("unknown action " + action)
 	}
@@ -370,12 +368,6 @@ func (s *Server) LogoutHandler() http.HandlerFunc {
 		}
 
 		http.Redirect(w, r, redirectURL.String(), http.StatusTemporaryRedirect)
-	}
-}
-
-func (s *Server) healthCheckHandler() http.HandlerFunc {
-	return func(rw http.ResponseWriter, req *http.Request) {
-		rw.WriteHeader(http.StatusOK)
 	}
 }
 

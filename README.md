@@ -284,7 +284,6 @@ They are parsed in the following precedence order.
            - `login`
            - `logout`
            - `callback`
-           - `health`
        - `route-rule` - a rule to match a request, this uses traefik's v3 rule parser for which you can find the documentation here: https://docs.traefik.io/v3.0/routing/routers/#rule, supported values are summarised here:
            - ``Header(`key`, `value`)``
            - ``HeaderRegexp(`key`, `regexp`)``
@@ -325,7 +324,7 @@ They are parsed in the following precedence order.
 
   Specifies the behavior when a request does not match any additionally defined `rules`. 
   
-  Valid options: `auth`, `soft-auth`, `allow`, `login`, `logout`, `callback`, `health`
+  Valid options: `auth`, `soft-auth`, `allow`, `login`, `logout`, `callback`
 
   Default: `auth` (i.e. all requests require authentication)
 
