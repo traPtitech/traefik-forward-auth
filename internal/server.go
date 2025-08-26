@@ -2,18 +2,17 @@ package tfa
 
 import (
 	"fmt"
-	"github.com/traPtitech/traefik-forward-auth/internal/authrule"
-	"github.com/traPtitech/traefik-forward-auth/internal/token"
-	"github.com/traefik/traefik/v3/pkg/middlewares/requestdecorator"
 	"net/http"
 	"net/url"
 	"strings"
 
 	"github.com/samber/lo"
 	"github.com/sirupsen/logrus"
-	mux "github.com/traefik/traefik/v3/pkg/muxer/http"
-
+	"github.com/traPtitech/traefik-forward-auth/internal/authrule"
 	"github.com/traPtitech/traefik-forward-auth/internal/provider"
+	"github.com/traPtitech/traefik-forward-auth/internal/token"
+	"github.com/traefik/traefik/v3/pkg/middlewares/requestdecorator"
+	mux "github.com/traefik/traefik/v3/pkg/muxer/http"
 )
 
 // Server contains router and handler methods
@@ -259,7 +258,7 @@ func (s *Server) AuthCallbackHandler() http.HandlerFunc {
 
 		// Check error
 		authError := r.URL.Query().Get("error")
-		if authError == "login_required" || authError == "consent_required" {
+		if authError == "login_required" || authError == "consent_required" || authError == "interaction_required" {
 			// Retry without the 'prompt' parameter (which was possibly 'none' or some other value)
 			s.authRedirect(logger, w, r, p, redirect, false)
 			return

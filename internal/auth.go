@@ -4,13 +4,13 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"github.com/traPtitech/traefik-forward-auth/internal/token"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/traPtitech/traefik-forward-auth/internal/provider"
+	"github.com/traPtitech/traefik-forward-auth/internal/token"
 )
 
 // Request Validation
@@ -67,7 +67,7 @@ func ValidateRedirect(r *http.Request, redirect string) (*url.URL, error) {
 	}
 
 	// If we're using an auth domain?
-	if use, base := useAuthDomain(r); use {
+	if use, base, _ := useAuthDomain(r); use {
 		// If we are using an auth domain, they redirect must share a common
 		// suffix with the requested redirect
 		if !strings.HasSuffix(redirectURL.Host, base) {
@@ -97,28 +97,35 @@ func currentUrl(r *http.Request) string {
 
 // Get oauth redirect uri
 func redirectUri(r *http.Request) string {
-	if use, _ := useAuthDomain(r); use {
+	if use, _, authHost := useAuthDomain(r); use {
 		p := r.Header.Get("X-Forwarded-Proto")
-		return fmt.Sprintf("%s://%s%s", p, config.AuthHost, config.CallbackPath)
+		return fmt.Sprintf("%s://%s%s", p, authHost, config.CallbackPath)
 	}
 
 	return fmt.Sprintf("%s%s", redirectBase(r), config.CallbackPath)
 }
 
 // Should we use auth host + what it is
-func useAuthDomain(r *http.Request) (bool, string) {
-	if config.AuthHost == "" {
-		return false, ""
+func useAuthDomain(r *http.Request) (use bool, cookieHost string, authHost string) {
+	if len(config.AuthHost) == 0 {
+		return
 	}
 
 	// Does the request match a given cookie domain?
-	reqMatch, reqHost := config.matchCookieDomains(r.Host)
+	reqMatch, reqCookieHost := config.matchCookieDomains(r.Host)
+	if !reqMatch {
+		return
+	}
 
 	// Do any of the auth hosts match a cookie domain?
-	authMatch, authHost := config.matchCookieDomains(config.AuthHost)
+	for _, authHost := range config.AuthHost {
+		authMatch, authCookieHost := config.matchCookieDomains(authHost)
+		if authMatch && reqCookieHost == authCookieHost {
+			return true, authCookieHost, authHost
+		}
+	}
 
-	// We need both to match the same domain
-	return reqMatch && authMatch && reqHost == authHost, reqHost
+	return
 }
 
 // Cookie methods
@@ -250,7 +257,7 @@ func cookieDomain(requestHost string) string {
 // Cookie domain
 func csrfCookieDomain(r *http.Request) string {
 	var host string
-	if use, domain := useAuthDomain(r); use {
+	if use, domain, _ := useAuthDomain(r); use {
 		host = domain
 	} else {
 		host = r.Host

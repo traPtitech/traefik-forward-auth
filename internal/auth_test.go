@@ -1,13 +1,14 @@
 package tfa
 
 import (
-	"github.com/traPtitech/traefik-forward-auth/internal/token"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/traPtitech/traefik-forward-auth/internal/token"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -109,7 +110,7 @@ func TestAuthValidateRedirect(t *testing.T) {
 	//
 	// With Auth Host
 	//
-	config.AuthHost = "auth.example.com"
+	config.AuthHost = []string{"auth.example.com"}
 	config.CookieDomains = []CookieDomain{"example.com"}
 	errStr = "redirect host does not match any expected hosts (should match cookie domain when using auth host)"
 
@@ -168,7 +169,7 @@ func TestRedirectUri(t *testing.T) {
 	// With Auth URL but no matching cookie domain
 	// - will not use auth host
 	//
-	config.AuthHost = "auth.example.com"
+	config.AuthHost = []string{"auth.example.com"}
 
 	uri, err = url.Parse(redirectUri(r))
 	assert.Nil(err)
@@ -179,7 +180,7 @@ func TestRedirectUri(t *testing.T) {
 	//
 	// With correct Auth URL + cookie domain
 	//
-	config.AuthHost = "auth.example.com"
+	config.AuthHost = []string{"auth.example.com"}
 	config.CookieDomains = []CookieDomain{"example.com"}
 
 	// Check url
@@ -196,7 +197,7 @@ func TestRedirectUri(t *testing.T) {
 	r = httptest.NewRequest("GET", "https://another.com/hello", nil)
 	r.Header.Add("X-Forwarded-Proto", "https")
 
-	config.AuthHost = "auth.example.com"
+	config.AuthHost = []string{"auth.example.com"}
 	config.CookieDomains = []CookieDomain{"example.com"}
 
 	// Check url
@@ -255,7 +256,7 @@ func TestAuthMakeCSRFCookie(t *testing.T) {
 	assert.Equal("app.example.com", c.Domain)
 
 	// With cookie domain and auth url
-	config.AuthHost = "auth.example.com"
+	config.AuthHost = []string{"auth.example.com"}
 	config.CookieDomains = []CookieDomain{"example.com"}
 	c = MakeCSRFCookie(r, "12333378901234567890123456789012")
 	assert.Equal("_forward_auth_csrf_123333", c.Name)

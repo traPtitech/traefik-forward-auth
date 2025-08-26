@@ -25,8 +25,8 @@ type Config struct {
 	// 	Allowed values: "text", "json", "pretty"
 	LogFormat string `mapstructure:"log-format"`
 
-	// AuthHost defines a single host to use when returning from 3rd party auth.
-	AuthHost string `mapstructure:"auth-host"`
+	// AuthHost defines hosts to use when returning from 3rd party auth. Comma separated.
+	AuthHost []string `mapstructure:"auth-host"`
 	// CookieDomains defines domains to set auth cookie on. Comma separated.
 	CookieDomains []CookieDomain `mapstructure:"cookie-domains"`
 	// InsecureCookie specifies to use insecure cookies.
@@ -189,8 +189,8 @@ func (c *Config) setup() error {
 	}
 
 	// Auth host check
-	if c.AuthHost != "" {
-		match, _ := c.matchCookieDomains(c.AuthHost)
+	for _, authHost := range c.AuthHost {
+		match, _ := c.matchCookieDomains(authHost)
 		if !match {
 			return errors.New("\"auth-host\" option must match one of \"cookie-domains\"")
 		}

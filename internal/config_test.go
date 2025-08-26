@@ -1,13 +1,13 @@
 package tfa
 
 import (
-	"github.com/samber/lo"
-	"strings"
-
 	// "fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/samber/lo"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -40,7 +40,7 @@ providers:
 	assert.Equal("warn", c.LogLevel)
 	assert.Equal("text", c.LogFormat)
 
-	assert.Equal("", c.AuthHost)
+	assert.Len(c.AuthHost, 0)
 	assert.Len(c.CookieDomains, 0)
 	assert.False(c.InsecureCookie)
 	assert.Equal("_forward_auth", c.CookieName)

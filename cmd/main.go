@@ -4,14 +4,15 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/samber/lo"
-	"github.com/sirupsen/logrus"
-	tfa "github.com/traPtitech/traefik-forward-auth/internal"
-	"github.com/traPtitech/traefik-forward-auth/internal/token"
 	"net/http"
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/samber/lo"
+	"github.com/sirupsen/logrus"
+	tfa "github.com/traPtitech/traefik-forward-auth/internal"
+	"github.com/traPtitech/traefik-forward-auth/internal/token"
 )
 
 func initConfigs(args []string) (*tfa.Config, *logrus.Logger) {
