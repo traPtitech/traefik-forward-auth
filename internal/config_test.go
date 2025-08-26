@@ -202,10 +202,6 @@ rules:
 }
 
 func TestConfigParseEnvironment(t *testing.T) {
-	// NOTE: As of github.com/spf13/viper@v1.19.0, this behavior requires "viper_bind_struct" build tag to work.
-	// Otherwise, keys not explicitly registered to viper (except the very existence of struct fields) will not be
-	// returned by viper.AllKeys(), and they will not be looked up on unmarshalling.
-
 	assert := assert.New(t)
 	t.Setenv("SECRET", "super-secret")
 	t.Setenv("COOKIE_NAME", "env_cookie_name")

@@ -14,7 +14,7 @@ ARG TARGETARCH
 ENV GOOS=$TARGETOS
 ENV GOARCH=$TARGETARCH
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
-    go build -o ./traefik-forward-auth -ldflags "-s -w" -tags "viper_bind_struct" ./cmd
+    go build -o ./traefik-forward-auth -ldflags "-s -w" ./cmd
 
 # Now copy it into our base image.
 FROM gcr.io/distroless/static-debian11:nonroot
