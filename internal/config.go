@@ -287,7 +287,12 @@ func (c *Config) setupProvider(name string) error {
 	return nil
 }
 
-func (c *Config) IsIPAddressAuthenticated(address string) (bool, error) {
+func (c *Config) IsIPAddressAuthenticated(addresses string) (bool, error) {
+	// Check only the right-most address to be safe
+	split := strings.Split(addresses, ",")
+	address := split[len(split)-1]
+	address = strings.TrimSpace(address)
+
 	addr := net.ParseIP(address)
 	if addr == nil {
 		return false, fmt.Errorf("invalid ip address: '%s'", address)

@@ -423,13 +423,15 @@ trusted-ip-addresses:
 	assert.NoError(err)
 
 	table := map[string]bool{
-		"1.2.3.3":      false,
-		"1.2.3.4":      true,
-		"1.2.3.5":      false,
-		"192.168.1.1":  false,
-		"30.1.0.1":     true,
-		"30.1.255.254": true,
-		"30.2.0.1":     false,
+		"1.2.3.3":           false,
+		"1.2.3.4":           true,
+		"1.2.3.5":           false,
+		"192.168.1.1":       false,
+		"30.1.0.1":          true,
+		"30.1.255.254":      true,
+		"30.2.0.1":          false,
+		"30.2.0.1, 1.2.3.4": true,
+		"1.2.3.4, 30.2.0.1": false,
 	}
 
 	for in, want := range table {
