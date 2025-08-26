@@ -1,8 +1,7 @@
-
+.PHONY: format
 format:
 	gofmt -w -s internal/*.go internal/provider/*.go cmd/*.go
 
+.PHONY: test
 test:
-	go test -tags "viper_bind_struct" -v ./...
-
-.PHONY: format test
+	go test -v ./...

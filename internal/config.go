@@ -3,14 +3,14 @@ package tfa
 import (
 	"errors"
 	"fmt"
-	"github.com/samber/lo"
-	"github.com/spf13/viper"
-	"github.com/traPtitech/traefik-forward-auth/internal/authrule"
 	"net"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/samber/lo"
+	"github.com/spf13/viper"
+	"github.com/traPtitech/traefik-forward-auth/internal/authrule"
 	"github.com/traPtitech/traefik-forward-auth/internal/provider"
 )
 
@@ -68,14 +68,17 @@ type Config struct {
 }
 
 func init() {
+	viper.SetOptions(
+		// NOTE: Bind dynamic struct fields from environment variables,
+		// even without explicitly letting viper "know" that a key exists via viper.SetDefault() etc.
+		// In the future, this feature flag might change: https://github.com/spf13/viper/issues/1851
+		viper.ExperimentalBindStruct(),
+	)
 	// Automatically load from respective environment variables
 	viper.AutomaticEnv()
 	// Allow getting underscore-delimited environment variables via dot-delimited or hyphen-delimited key values
 	// e.g. viper.Get("foo.bar") will lookup "FOO_BAR" environment variable so these can be mapped to structs
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_", "-", "_"))
-	// NOTE: Building with build tag "viper_bind_struct" allows binding dynamic struct fields from environment variables,
-	// even without explicitly letting viper "know" that a key exists via viper.SetDefault() etc.
-	// In the future, this feature flag might change: https://github.com/spf13/viper/issues/1851
 
 	// Set defaults
 	viper.SetDefault("log-level", "warn")

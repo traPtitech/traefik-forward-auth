@@ -1,0 +1,95 @@
+name: Build image
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - v*.*.*
+
+  pull_request:
+
+  workflow_call:
+    inputs:
+      ref_name:
+        description: Tag short ref name like v1.2.3
+        type: string
+        required: true
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  REGISTRY_USER: traptitech
+  IMAGE: traefik-forward-auth
+
+jobs:
+  image:
+    name: Build images
+    runs-on: ubuntu-latest
+    steps:
+      # type=ref,event=tag or type=semver will not fire in workflow_dispatch via workflow_call, so we're passing tag value via inputs manually.
+      - id: calc-tag
+        name: Calculate docker tag
+        run: |
+          echo "event_name=${{ github.event_name }}"
+          echo "ref_type=${{ github.ref_type }}"
+          ref_name="${{ inputs.ref_name || github.ref_name }}"
+          echo "ref_name=${ref_name}"
+
+          if [ "${{ github.event_name == 'push' && github.ref_type == 'tag' || inputs.ref_name != '' }}" = "true" ]; then
+            tag=${ref_name#v}
+            echo "Event type is tag, calculating docker tag => $tag"
+            echo "tag=${tag}" >> $GITHUB_OUTPUT
+          fi
+
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+        id: buildx
+      - name: Builder instance name
+        run: echo ${{ steps.buildx.outputs.name }}
+      - name: Available platforms
+        run: echo ${{ steps.buildx.outputs.platforms }}
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ env.REGISTRY_USER }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ env.REGISTRY_USER }}/${{ env.IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha
+            type=raw,value=${{ steps.calc-tag.outputs.tag }},enable=${{ steps.calc-tag.outputs.tag != '' }}
+            type=raw,value=latest,enable=${{ steps.calc-tag.outputs.tag != '' }}
+
+      - name: Build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  release:
+    if: ${{ github.event_name == 'push' && github.ref_type == 'tag' || inputs.ref_name != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          # tag_name will default in the current branch name for workflow_dispatch via workflow_call, so we're passing tag value via inputs manually.
+          tag_name: ${{ inputs.ref_name || github.ref_name }}
+          generate_release_notes: true
