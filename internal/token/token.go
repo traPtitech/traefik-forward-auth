@@ -3,6 +3,7 @@ package token
 import (
 	"errors"
 	"fmt"
+
 	"github.com/Jeffail/gabs/v2"
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -44,8 +45,10 @@ func SignToken(object any, expiryUnixSeconds int64, secret []byte) (string, erro
 	return token.SignedString(secret)
 }
 
+var jwtParser = jwt.NewParser(jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
+
 func VerifyToken(token string, secret []byte) (any, error) {
-	tok, err := jwt.Parse(token, func(token *jwt.Token) (any, error) { return secret, nil })
+	tok, err := jwtParser.Parse(token, func(token *jwt.Token) (any, error) { return secret, nil })
 	if err != nil {
 		return "", err
 	}
