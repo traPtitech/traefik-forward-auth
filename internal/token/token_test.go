@@ -2,10 +2,12 @@ package token
 
 import (
 	"bytes"
-	"github.com/samber/lo"
-	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
+
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/samber/lo"
+	"github.com/stretchr/testify/require"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -72,6 +74,22 @@ func Test_verifyToken(t *testing.T) {
 		assert := assert.New(t)
 
 		_, err := VerifyToken("", secret)
+		assert.Error(err)
+	})
+
+	t.Run("should not pass 'none' algorithm", func(t *testing.T) {
+		assert := assert.New(t)
+
+		expiry := time.Now().Add(10 * time.Second).Unix()
+		claims := jwt.MapClaims{
+			"exp":       expiry,
+			userinfoKey: map[string]any{},
+		}
+		token := jwt.NewWithClaims(jwt.SigningMethodNone, claims)
+		tokenString, err := token.SignedString(jwt.UnsafeAllowNoneSignatureType)
+		require.NoError(t, err)
+
+		_, err = VerifyToken(tokenString, secret)
 		assert.Error(err)
 	})
 
