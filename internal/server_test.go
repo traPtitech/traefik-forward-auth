@@ -177,6 +177,65 @@ func TestServerAuthHandlerValid(t *testing.T) {
 	assert.Equal([]string{"test@example.com"}, users, "X-Forwarded-User header should match user")
 }
 
+func TestServerAuthHandlerMultipleCookies_validSecond(t *testing.T) {
+	assert := assert.New(t)
+	initTestConfig()
+
+	// When the first cookie is invalid but the second is valid,
+	// the request should still be allowed (auth host mode with overlapping domains)
+	req := newHTTPRequest("GET", "http://example.com/foo")
+	validCookie, err := MakeCookie(req, m{"email": "test@example.com"})
+	assert.NoError(err)
+
+	invalidCookie := &http.Cookie{Name: config.CookieName, Value: "invalid.token.value"}
+
+	// Add invalid cookie first, then valid cookie
+	req.Header.Add("Cookie", invalidCookie.String())
+	req.Header.Add("Cookie", validCookie.String())
+
+	res, _ := doHttpRequest(req, nil)
+	assert.Equal(200, res.StatusCode, "request with valid second cookie should be allowed")
+
+	users := res.Header["X-Forwarded-User"]
+	assert.Len(users, 1, "valid request should have X-Forwarded-User header")
+	assert.Equal([]string{"test@example.com"}, users, "X-Forwarded-User header should match user")
+}
+
+func TestServerAuthHandlerMultipleCookies_allInvalid(t *testing.T) {
+	assert := assert.New(t)
+	initTestConfig()
+
+	// When all cookies are invalid, the request should be rejected
+	req := newHTTPRequest("GET", "http://example.com/foo")
+
+	invalidCookie1 := &http.Cookie{Name: config.CookieName, Value: "invalid.token.one"}
+	invalidCookie2 := &http.Cookie{Name: config.CookieName, Value: "invalid.token.two"}
+
+	req.Header.Add("Cookie", invalidCookie1.String())
+	req.Header.Add("Cookie", invalidCookie2.String())
+
+	res, _ := doHttpRequest(req, nil)
+	assert.Equal(307, res.StatusCode, "request with all invalid cookies should be redirected")
+}
+
+func TestGetCookiesByName(t *testing.T) {
+	assert := assert.New(t)
+
+	req := httptest.NewRequest("GET", "http://example.com", nil)
+	req.Header.Add("Cookie", (&http.Cookie{Name: "target", Value: "first"}).String())
+	req.Header.Add("Cookie", (&http.Cookie{Name: "other", Value: "ignore"}).String())
+	req.Header.Add("Cookie", (&http.Cookie{Name: "target", Value: "second"}).String())
+
+	cookies := getCookiesByName(req, "target")
+	assert.Len(cookies, 2, "should return all cookies matching the name")
+	assert.Equal("first", cookies[0].Value)
+	assert.Equal("second", cookies[1].Value)
+
+	// No match
+	cookies = getCookiesByName(req, "nonexistent")
+	assert.Len(cookies, 0, "should return empty slice for no match")
+}
+
 func TestServerAuthHandlerTrustedIP_trusted(t *testing.T) {
 	assert := assert.New(t)
 	initTestConfig()
