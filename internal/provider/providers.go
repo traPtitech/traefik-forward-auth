@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"time"
 	// "net/url"
 
 	"golang.org/x/oauth2"
@@ -63,5 +64,9 @@ func (p *OAuthProvider) OAuthGetLoginURL(redirectURI, state string, allowPrompt 
 // OAuthExchangeCode provides a base "ExchangeCode" for proiders using OAauth2
 func (p *OAuthProvider) OAuthExchangeCode(redirectURI, code string) (*oauth2.Token, error) {
 	config := p.ConfigCopy(redirectURI)
-	return config.Exchange(p.ctx, code)
+
+	ctx, cancel := context.WithDeadline(p.ctx, time.Now().Add(5*time.Second))
+	defer cancel()
+
+	return config.Exchange(ctx, code)
 }
