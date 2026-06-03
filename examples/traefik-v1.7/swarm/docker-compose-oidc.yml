@@ -2,7 +2,7 @@ version: '3'
 
 services:
   traefik:
-    image: traefik:1.7
+    image: traefik:1.7@sha256:5d47b7bb25467dbc27ab2b260e496a7f9e1232511af369cdcc98daefba7979c1
     command: -c /traefik.toml
     ports:
       - "8085:80"
