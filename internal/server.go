@@ -57,20 +57,23 @@ func (s *Server) buildRoutes() {
 // RootHandler Overwrites the request method, host and URL with those from the
 // forwarded request so that it's correctly routed by mux
 func (s *Server) RootHandler(w http.ResponseWriter, r *http.Request) {
+	// Keep the original request unchanged for the HTTP response writer.
+	forwardedRequest := r.Clone(r.Context())
+
 	// Modify request if we're acting as forward auth middleware
 	// https://doc.traefik.io/traefik/v3.0/middlewares/http/forwardauth/
 	if v := r.Header.Get("X-Forwarded-Method"); v != "" {
-		r.Method = v
+		forwardedRequest.Method = v
 	}
 	if v := r.Header.Get("X-Forwarded-Host"); v != "" {
-		r.Host = v
+		forwardedRequest.Host = v
 	}
 	if v := r.Header.Get("X-Forwarded-Uri"); v != "" {
-		r.URL, _ = url.Parse(v)
+		forwardedRequest.URL, _ = url.Parse(v)
 	}
 
 	// Pass to mux
-	s.reqDecorator.ServeHTTP(w, r, s.muxer.ServeHTTP)
+	s.reqDecorator.ServeHTTP(w, forwardedRequest, s.muxer.ServeHTTP)
 }
 
 func (s *Server) Handler(action, providerName, rule string, authPred authrule.Predicate) http.HandlerFunc {

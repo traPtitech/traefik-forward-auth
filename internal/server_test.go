@@ -46,6 +46,11 @@ trusted-ip-addresses:
 func TestServerRootHandler(t *testing.T) {
 	assert := assert.New(t)
 	initTestConfig()
+	server := NewServer()
+	var forwarded *http.Request
+	require.NoError(t, server.muxer.AddRoute("PathPrefix(`/`)", "v3", 10000, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		forwarded = r
+	})))
 
 	// X-Forwarded headers should be read into request
 	req := httptest.NewRequest("POST", "http://should-use-x-forwarded.com/should?ignore=me", nil)
@@ -53,12 +58,15 @@ func TestServerRootHandler(t *testing.T) {
 	req.Header.Add("X-Forwarded-Proto", "https")
 	req.Header.Add("X-Forwarded-Host", "example.com")
 	req.Header.Add("X-Forwarded-Uri", "/foo?q=bar")
-	NewServer().RootHandler(httptest.NewRecorder(), req)
+	forwarded = nil
+	server.RootHandler(httptest.NewRecorder(), req)
+	require.NotNil(t, forwarded)
 
-	assert.Equal("GET", req.Method, "x-forwarded-method should be read into request")
-	assert.Equal("example.com", req.Host, "x-forwarded-host should be read into request")
-	assert.Equal("/foo", req.URL.Path, "x-forwarded-uri should be read into request")
-	assert.Equal("/foo?q=bar", req.URL.RequestURI(), "x-forwarded-uri should be read into request")
+	assert.Equal("POST", req.Method, "original request should remain unchanged")
+	assert.Equal("GET", forwarded.Method, "x-forwarded-method should be read into request")
+	assert.Equal("example.com", forwarded.Host, "x-forwarded-host should be read into request")
+	assert.Equal("/foo", forwarded.URL.Path, "x-forwarded-uri should be read into request")
+	assert.Equal("/foo?q=bar", forwarded.URL.RequestURI(), "x-forwarded-uri should be read into request")
 
 	// Other X-Forwarded headers should be read in into request and original URL
 	// should be preserved if X-Forwarded-Uri not present
@@ -66,12 +74,15 @@ func TestServerRootHandler(t *testing.T) {
 	req.Header.Add("X-Forwarded-Method", "GET")
 	req.Header.Add("X-Forwarded-Proto", "https")
 	req.Header.Add("X-Forwarded-Host", "example.com")
-	NewServer().RootHandler(httptest.NewRecorder(), req)
+	forwarded = nil
+	server.RootHandler(httptest.NewRecorder(), req)
+	require.NotNil(t, forwarded)
 
-	assert.Equal("GET", req.Method, "x-forwarded-method should be read into request")
-	assert.Equal("example.com", req.Host, "x-forwarded-host should be read into request")
-	assert.Equal("/should-not", req.URL.Path, "request url should be preserved if x-forwarded-uri not present")
-	assert.Equal("/should-not?ignore=me", req.URL.RequestURI(), "request url should be preserved if x-forwarded-uri not present")
+	assert.Equal("POST", req.Method, "original request should remain unchanged")
+	assert.Equal("GET", forwarded.Method, "x-forwarded-method should be read into request")
+	assert.Equal("example.com", forwarded.Host, "x-forwarded-host should be read into request")
+	assert.Equal("/should-not", forwarded.URL.Path, "request url should be preserved if x-forwarded-uri not present")
+	assert.Equal("/should-not?ignore=me", forwarded.URL.RequestURI(), "request url should be preserved if x-forwarded-uri not present")
 }
 
 func TestServerAuthHandlerInvalid(t *testing.T) {
