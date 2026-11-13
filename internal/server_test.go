@@ -5,6 +5,7 @@ import (
 	"github.com/samber/lo"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"strings"
@@ -677,4 +678,38 @@ func newHTTPRequest(method, target string) *http.Request {
 	r.Header.Add("X-Forwarded-Uri", u.RequestURI())
 	r.Header.Add("X-Forwarded-For", "127.0.0.1")
 	return r
+}
+
+func TestConcurrentAuthFlowsPreserveCSRFCookies(t *testing.T) {
+	initTestConfig()
+	jar, err := cookiejar.New(nil)
+	require.NoError(t, err)
+	origin, err := url.Parse("https://example.com")
+	require.NoError(t, err)
+
+	request := func(path string) *http.Response {
+		req := newHTTPRequest("GET", origin.String()+path)
+		for _, cookie := range jar.Cookies(origin) {
+			req.AddCookie(cookie)
+		}
+		res, _ := doHttpRequest(req, nil)
+		jar.SetCookies(origin, res.Cookies())
+		return res
+	}
+
+	first := request("/first")
+	require.Equal(t, http.StatusTemporaryRedirect, first.StatusCode)
+	firstURL, err := first.Location()
+	require.NoError(t, err)
+	second := request("/second")
+	require.Equal(t, http.StatusTemporaryRedirect, second.StatusCode)
+	secondURL, err := second.Location()
+	require.NoError(t, err)
+
+	// A retry must also leave another in-flight flow's cookie intact.
+	for _, state := range []string{firstURL.Query().Get("state"), secondURL.Query().Get("state")} {
+		query := url.Values{"state": {state}, "error": {"login_required"}}
+		res := request("/_oauth?" + query.Encode())
+		assert.Equal(t, http.StatusTemporaryRedirect, res.StatusCode)
+	}
 }
