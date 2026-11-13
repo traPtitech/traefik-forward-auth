@@ -410,7 +410,7 @@ func (s *Server) authRedirect(logger *logrus.Entry, w http.ResponseWriter, r *ht
 	}
 
 	// Forward them on
-	loginURL := p.GetLoginURL(redirectUri(r), MakeState(returnUrl, p, nonce), allowPrompt)
+	loginURL := p.GetLoginURL(redirectUri(r), MakeState(returnUrl, p, nonce), lo.Ternary(allowPrompt, provider.PromptConfigured, provider.PromptOmit))
 	http.Redirect(w, r, loginURL, http.StatusTemporaryRedirect)
 
 	logger.WithFields(logrus.Fields{

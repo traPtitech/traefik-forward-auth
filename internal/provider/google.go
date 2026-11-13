@@ -55,12 +55,15 @@ func (g *Google) Setup() error {
 }
 
 // GetLoginURL provides the login url for the given redirect uri and state
-func (g *Google) GetLoginURL(redirectURI, state string, forcePrompt bool) string {
+func (g *Google) GetLoginURL(redirectURI, state string, prompt Prompt) string {
 	q := url.Values{}
 	q.Set("client_id", g.ClientID)
 	q.Set("response_type", "code")
 	q.Set("scope", g.Scope)
-	if g.Prompt != "" {
+	switch {
+	case prompt == PromptNone:
+		q.Set("prompt", "none")
+	case prompt == PromptConfigured && g.Prompt != "":
 		q.Set("prompt", g.Prompt)
 	}
 	q.Set("redirect_uri", redirectURI)

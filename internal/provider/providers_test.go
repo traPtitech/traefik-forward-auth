@@ -7,6 +7,9 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"golang.org/x/oauth2"
 )
 
 // Utilities
@@ -46,5 +49,26 @@ func (s *OAuthServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}`)
 	} else {
 		s.t.Fatal("Unrecognised request: ", r.Method, r.URL, string(body))
+	}
+}
+
+func TestOAuthGetLoginURLPrompt(t *testing.T) {
+	p := OAuthProvider{
+		Prompt: "consent",
+		Config: &oauth2.Config{Endpoint: oauth2.Endpoint{AuthURL: "https://provider.com/auth"}},
+	}
+
+	cases := []struct {
+		prompt Prompt
+		want   string
+	}{
+		{PromptConfigured, "consent"},
+		{PromptOmit, ""},
+		{PromptNone, "none"},
+	}
+	for _, cc := range cases {
+		uri, err := url.Parse(p.OAuthGetLoginURL("http://example.com/_oauth", "state", cc.prompt))
+		assert.NoError(t, err)
+		assert.Equal(t, cc.want, uri.Query().Get("prompt"))
 	}
 }
