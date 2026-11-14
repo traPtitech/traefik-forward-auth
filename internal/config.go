@@ -26,18 +26,21 @@ type Config struct {
 	LogFormat string `mapstructure:"log-format"`
 
 	// AuthHost defines hosts to use when returning from 3rd party auth. Comma separated.
+	// Each auth host must belong to one of AuthDomains.
 	AuthHost []string `mapstructure:"auth-host"`
-	// CookieDomains defines domains to set auth cookie on. Comma separated.
-	CookieDomains []CookieDomain `mapstructure:"cookie-domains"`
+	// AuthDomains defines domains whose hosts log in via the auth host on the same domain. Comma separated.
+	// Auth cookies are set on each host, never on these domains.
+	AuthDomains []AuthDomain `mapstructure:"auth-domains"`
 	// InsecureCookie specifies to use insecure cookies.
 	InsecureCookie bool `mapstructure:"insecure-cookie"`
 	// CookieName defines cookie name to use.
 	CookieName string `mapstructure:"cookie-name"`
 	// CSRFCookieName defines CSRF cookie name to use.
 	CSRFCookieName string `mapstructure:"csrf-cookie-name"`
-	// Lifetime defines cookie lifetime in seconds.
+	// Lifetime defines auth cookie lifetime in seconds.
 	Lifetime int `mapstructure:"lifetime"`
 	// CallbackPath defines callback URL path.
+	// "<callback-path>/authorize" and "<callback-path>/ticket" are also reserved for logging in via an auth host.
 	CallbackPath string `mapstructure:"callback-path"`
 	// Secret defines secret used for signing a token (required).
 	Secret string `mapstructure:"secret"`
@@ -170,14 +173,6 @@ func (c *Config) setup() error {
 			AuthRule:  "",
 		}
 	}
-	if _, ok := c.Rules["callback"]; !ok {
-		c.Rules["callback"] = &Rule{
-			Action:    "callback",
-			RouteRule: fmt.Sprintf("Path(`%s`)", c.CallbackPath),
-			Priority:  1,
-			AuthRule:  "",
-		}
-	}
 	if _, ok := c.Rules["health"]; !ok {
 		c.Rules["health"] = &Rule{
 			Action: "allow",
@@ -190,9 +185,8 @@ func (c *Config) setup() error {
 
 	// Auth host check
 	for _, authHost := range c.AuthHost {
-		match, _ := c.matchCookieDomains(authHost)
-		if !match {
-			return errors.New("\"auth-host\" option must match one of \"cookie-domains\"")
+		if _, ok := c.authDomainOf(authHost); !ok {
+			return errors.New("\"auth-host\" option must match one of \"auth-domains\"")
 		}
 	}
 
@@ -310,7 +304,7 @@ func (c *Config) IsIPAddressAuthenticated(addresses string) (bool, error) {
 // Rule holds defined rules
 type Rule struct {
 	// Action defines auth action to take no this route.
-	// 	Allowed values: "allow", "soft-auth", "allow", "login", "logout", "callback"
+	// 	Allowed values: "auth", "soft-auth", "allow", "login", "logout"
 	Action string `mapstructure:"action"`
 	// RouteRule defines router rule to determine which request matches this rule.
 	// Uses traefik v3 router syntax.
@@ -341,7 +335,7 @@ type Rule struct {
 
 // setup performs validation and setup.
 func (r *Rule) setup(c *Config) error {
-	allowed := []string{"auth", "soft-auth", "allow", "login", "logout", "callback"}
+	allowed := []string{"auth", "soft-auth", "allow", "login", "logout"}
 	if !lo.Contains(allowed, r.Action) {
 		return fmt.Errorf("invalid rule action, must be one of: %v", allowed)
 	}

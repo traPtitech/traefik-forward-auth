@@ -15,10 +15,23 @@ type Providers struct {
 	GenericOAuth GenericOAuth `mapstructure:"generic-oauth"`
 }
 
+// Prompt selects the "prompt" parameter sent to the authorization endpoint.
+type Prompt int
+
+const (
+	// PromptConfigured sends the provider's configured prompt, if any.
+	PromptConfigured Prompt = iota
+	// PromptOmit sends no prompt.
+	PromptOmit
+	// PromptNone sends "prompt=none" regardless of the configuration,
+	// so that the provider answers without showing any page to the user.
+	PromptNone
+)
+
 // Provider is used to authenticate users
 type Provider interface {
 	Name() string
-	GetLoginURL(redirectURI, state string, allowPrompt bool) string
+	GetLoginURL(redirectURI, state string, prompt Prompt) string
 	ExchangeCode(redirectURI, code string) (string, error)
 	GetUser(token string) (any, error)
 	Setup() error
@@ -47,11 +60,14 @@ func (p *OAuthProvider) ConfigCopy(redirectURI string) oauth2.Config {
 }
 
 // OAuthGetLoginURL provides a base "GetLoginURL" for proiders using OAauth2
-func (p *OAuthProvider) OAuthGetLoginURL(redirectURI, state string, allowPrompt bool) string {
+func (p *OAuthProvider) OAuthGetLoginURL(redirectURI, state string, prompt Prompt) string {
 	config := p.ConfigCopy(redirectURI)
 
 	var options []oauth2.AuthCodeOption
-	if p.Prompt != "" && allowPrompt {
+	switch {
+	case prompt == PromptNone:
+		options = append(options, oauth2.SetAuthURLParam("prompt", "none"))
+	case prompt == PromptConfigured && p.Prompt != "":
 		options = append(options, oauth2.SetAuthURLParam("prompt", p.Prompt))
 	}
 	if p.Resource != "" {
