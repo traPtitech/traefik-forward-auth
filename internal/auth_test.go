@@ -111,7 +111,7 @@ func TestAuthValidateRedirect(t *testing.T) {
 	// With Auth Host
 	//
 	config.AuthHost = []string{"auth.example.com"}
-	config.CookieDomains = []CookieDomain{"example.com"}
+	config.AuthDomains = []AuthDomain{"example.com"}
 	errStr = "redirect host does not match any expected hosts (should match cookie domain when using auth host)"
 
 	_, err = ValidateRedirect(
@@ -181,7 +181,7 @@ func TestRedirectUri(t *testing.T) {
 	// With correct Auth URL + cookie domain
 	//
 	config.AuthHost = []string{"auth.example.com"}
-	config.CookieDomains = []CookieDomain{"example.com"}
+	config.AuthDomains = []AuthDomain{"example.com"}
 
 	// Check url
 	uri, err = url.Parse(redirectUri(r))
@@ -198,7 +198,7 @@ func TestRedirectUri(t *testing.T) {
 	r.Header.Add("X-Forwarded-Proto", "https")
 
 	config.AuthHost = []string{"auth.example.com"}
-	config.CookieDomains = []CookieDomain{"example.com"}
+	config.AuthDomains = []AuthDomain{"example.com"}
 
 	// Check url
 	uri, err = url.Parse(redirectUri(r))
@@ -250,14 +250,14 @@ func TestAuthMakeCSRFCookie(t *testing.T) {
 	assert.Equal("app.example.com", c.Domain)
 
 	// With cookie domain but no auth url
-	config.CookieDomains = []CookieDomain{"example.com"}
+	config.AuthDomains = []AuthDomain{"example.com"}
 	c = MakeCSRFCookie(r, "12222278901234567890123456789012")
 	assert.Equal("_forward_auth_csrf_122222", c.Name)
 	assert.Equal("app.example.com", c.Domain)
 
 	// With cookie domain and auth url
 	config.AuthHost = []string{"auth.example.com"}
-	config.CookieDomains = []CookieDomain{"example.com"}
+	config.AuthDomains = []AuthDomain{"example.com"}
 	c = MakeCSRFCookie(r, "12333378901234567890123456789012")
 	assert.Equal("_forward_auth_csrf_123333", c.Name)
 	assert.Equal("example.com", c.Domain)
@@ -366,21 +366,21 @@ func TestAuthNonce(t *testing.T) {
 	assert.NotEqual(nonce1, nonce2, "nonce should not be equal")
 }
 
-func TestAuthCookieDomainMatch(t *testing.T) {
+func TestAuthDomainMatch(t *testing.T) {
 	assert := assert.New(t)
 	cd := "example.com"
 
 	// Exact should match
-	assert.True(CookieDomainMatch(cd, "example.com"), "exact domain should match")
+	assert.True(AuthDomainMatch(cd, "example.com"), "exact domain should match")
 
 	// Subdomain should match
-	assert.True(CookieDomainMatch(cd, "test.example.com"), "subdomain should match")
-	assert.True(CookieDomainMatch(cd, "twolevels.test.example.com"), "subdomain should match")
-	assert.True(CookieDomainMatch(cd, "many.many.levels.test.example.com"), "subdomain should match")
+	assert.True(AuthDomainMatch(cd, "test.example.com"), "subdomain should match")
+	assert.True(AuthDomainMatch(cd, "twolevels.test.example.com"), "subdomain should match")
+	assert.True(AuthDomainMatch(cd, "many.many.levels.test.example.com"), "subdomain should match")
 
 	// Derived domain should not match
-	assert.False(CookieDomainMatch(cd, "testexample.com"), "derived domain should not match")
+	assert.False(AuthDomainMatch(cd, "testexample.com"), "derived domain should not match")
 
 	// Other domain should not match
-	assert.False(CookieDomainMatch(cd, "test.com"), "other domain should not match")
+	assert.False(AuthDomainMatch(cd, "test.com"), "other domain should not match")
 }

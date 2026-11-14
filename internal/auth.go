@@ -112,14 +112,14 @@ func useAuthDomain(r *http.Request) (use bool, cookieHost string, authHost strin
 	}
 
 	// Does the request match a given cookie domain?
-	reqMatch, reqCookieHost := config.matchCookieDomains(r.Host)
+	reqMatch, reqCookieHost := config.matchAuthDomain(r.Host)
 	if !reqMatch {
 		return
 	}
 
 	// Do any of the auth hosts match a cookie domain?
 	for _, authHost := range config.AuthHost {
-		authMatch, authCookieHost := config.matchCookieDomains(authHost)
+		authMatch, authCookieHost := config.matchAuthDomain(authHost)
 		if authMatch && reqCookieHost == authCookieHost {
 			return true, authCookieHost, authHost
 		}
@@ -250,7 +250,7 @@ func Nonce() (error, string) {
 
 // Cookie domain
 func cookieDomain(requestHost string) string {
-	_, domain := config.matchCookieDomains(requestHost)
+	_, domain := config.matchAuthDomain(requestHost)
 	return domain
 }
 
@@ -269,12 +269,12 @@ func csrfCookieDomain(r *http.Request) string {
 }
 
 // Return matching cookie domain if exists
-func (c *Config) matchCookieDomains(domain string) (bool, string) {
+func (c *Config) matchAuthDomain(domain string) (bool, string) {
 	// Remove port
 	p := strings.Split(domain, ":")
 
-	for _, d := range c.CookieDomains {
-		if CookieDomainMatch(d, p[0]) {
+	for _, d := range c.AuthDomains {
+		if AuthDomainMatch(d, p[0]) {
 			return true, d
 		}
 	}
@@ -287,11 +287,11 @@ func cookieExpiry() time.Time {
 	return time.Now().Local().Add(config.lifetimeDuration)
 }
 
-// CookieDomain holds cookie domain info
-type CookieDomain = string
+// AuthDomain holds cookie domain info
+type AuthDomain = string
 
-// CookieDomainMatch checks if the given host matches this CookieDomain
-func CookieDomainMatch(cd CookieDomain, host string) bool {
+// AuthDomainMatch checks if the given host matches this AuthDomain
+func AuthDomainMatch(cd AuthDomain, host string) bool {
 	// Exact domain match?
 	if host == cd {
 		return true

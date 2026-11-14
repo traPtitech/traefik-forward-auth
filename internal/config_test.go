@@ -41,7 +41,7 @@ providers:
 	assert.Equal("text", c.LogFormat)
 
 	assert.Len(c.AuthHost, 0)
-	assert.Len(c.CookieDomains, 0)
+	assert.Len(c.AuthDomains, 0)
 	assert.False(c.InsecureCookie)
 	assert.Equal("_forward_auth", c.CookieName)
 	assert.Equal("_forward_auth_csrf", c.CSRFCookieName)
@@ -152,12 +152,12 @@ providers:
     client-id: id
     client-secret: secret
 
-cookie-domains: test.com,test2.com`)
+auth-domains: test.com,test2.com`)
 	c, err := NewConfig(tmpConfigFile)
 	require.Nil(t, err)
 
 	expected1 := []string{"test.com", "test2.com"}
-	assert.Equal(expected1, c.CookieDomains, "should read comma separated list")
+	assert.Equal(expected1, c.AuthDomains, "should read comma separated list")
 }
 
 func TestConfigParseYaml(t *testing.T) {
@@ -207,7 +207,7 @@ func TestConfigParseEnvironment(t *testing.T) {
 	t.Setenv("COOKIE_NAME", "env_cookie_name")
 	t.Setenv("PROVIDERS_GOOGLE_CLIENT_ID", "env_client_id")
 	t.Setenv("PROVIDERS_GOOGLE_CLIENT_SECRET", "very-secret")
-	t.Setenv("COOKIE_DOMAINS", "test1.com,example.org")
+	t.Setenv("AUTH_DOMAINS", "test1.com,example.org")
 
 	require.Equal(t, "env_cookie_name", os.Getenv("COOKIE_NAME"))
 
@@ -218,10 +218,10 @@ func TestConfigParseEnvironment(t *testing.T) {
 	assert.Equal("env_cookie_name", c.CookieName, "variable should be read from environment")
 	assert.Equal("env_client_id", c.Providers.Google.ClientID, "variable should be read from environment")
 	assert.Equal("very-secret", c.Providers.Google.ClientSecret, "variable should be read from environment")
-	assert.Equal([]CookieDomain{
+	assert.Equal([]AuthDomain{
 		"test1.com",
 		"example.org",
-	}, c.CookieDomains, "array variable should be read from environment COOKIE_DOMAINS")
+	}, c.AuthDomains, "array variable should be read from environment AUTH_DOMAINS")
 }
 
 func TestConfigTransformation(t *testing.T) {
