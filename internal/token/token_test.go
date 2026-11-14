@@ -61,6 +61,138 @@ func TestLimitFields(t *testing.T) {
 	})
 }
 
+func TestVerifyHostToken(t *testing.T) {
+	secret := []byte("secret")
+	userinfo := m{
+		"username": "test-user",
+		"nested": m{
+			"key": "value",
+		},
+	}
+	valid := time.Now().Add(10 * time.Second)
+
+	t.Run("should not pass empty", func(t *testing.T) {
+		_, err := VerifyHostToken("", "app.example.com", secret)
+		assert.Error(t, err)
+	})
+
+	t.Run("should not pass 'none' algorithm", func(t *testing.T) {
+		claims := jwt.MapClaims{
+			claimKind: kindHost,
+			"aud":     "app.example.com",
+			"exp":     valid.Unix(),
+			claimUser: m{},
+		}
+		tokenString, err := jwt.NewWithClaims(jwt.SigningMethodNone, claims).SignedString(jwt.UnsafeAllowNoneSignatureType)
+		require.NoError(t, err)
+
+		_, err = VerifyHostToken(tokenString, "app.example.com", secret)
+		assert.Error(t, err)
+	})
+
+	t.Run("should catch modified mac", func(t *testing.T) {
+		tok, err := SignHostToken(userinfo, "app.example.com", valid, secret)
+		require.NoError(t, err)
+
+		tokBytes := []byte(tok)
+		idx := bytes.LastIndex(tokBytes, []byte{'.'})
+		tokBytes[idx+1] = lo.Ternary(tokBytes[idx+1] == 'A', byte('B'), byte('A'))
+
+		_, err = VerifyHostToken(string(tokBytes), "app.example.com", secret)
+		assert.Error(t, err)
+	})
+
+	t.Run("should catch expired", func(t *testing.T) {
+		tok, err := SignHostToken(userinfo, "app.example.com", time.Now().Add(-time.Second), secret)
+		require.NoError(t, err)
+
+		_, err = VerifyHostToken(tok, "app.example.com", secret)
+		assert.ErrorIs(t, err, ErrExpired)
+	})
+
+	t.Run("should reject token for another host", func(t *testing.T) {
+		tok, err := SignHostToken(userinfo, "evil.example.com", valid, secret)
+		require.NoError(t, err)
+
+		_, err = VerifyHostToken(tok, "app.example.com", secret)
+		assert.ErrorIs(t, err, ErrAudience)
+	})
+
+	t.Run("should reject ticket", func(t *testing.T) {
+		tok, err := SignTicket(Ticket{User: userinfo, NonceHash: "hash", Redirect: "https://app.example.com/"}, "app.example.com", valid, secret)
+		require.NoError(t, err)
+
+		_, err = VerifyHostToken(tok, "app.example.com", secret)
+		assert.ErrorIs(t, err, ErrKind)
+	})
+
+	// Tokens of the previous format carry no audience and must not be accepted after migration.
+	t.Run("should reject token without audience", func(t *testing.T) {
+		tok, err := sign(jwt.MapClaims{"exp": valid.Unix(), "tfa": userinfo}, secret)
+		require.NoError(t, err)
+
+		_, err = VerifyHostToken(tok, "app.example.com", secret)
+		assert.Error(t, err)
+	})
+
+	t.Run("should accept valid token", func(t *testing.T) {
+		tok, err := SignHostToken(userinfo, "app.example.com", valid, secret)
+		require.NoError(t, err)
+
+		object, err := VerifyHostToken(tok, "app.example.com", secret)
+		assert.NoError(t, err)
+		assert.Equal(t, userinfo, object)
+	})
+}
+
+func TestVerifyTicket(t *testing.T) {
+	secret := []byte("secret")
+	userinfo := m{"username": "test-user"}
+	ticket := Ticket{User: userinfo, NonceHash: "hash", Redirect: "https://app.example.com/page"}
+	valid := time.Now().Add(10 * time.Second)
+
+	t.Run("should accept valid ticket", func(t *testing.T) {
+		tok, err := SignTicket(ticket, "app.example.com", valid, secret)
+		require.NoError(t, err)
+
+		got, err := VerifyTicket(tok, "app.example.com", secret)
+		assert.NoError(t, err)
+		assert.Equal(t, ticket, got)
+	})
+
+	t.Run("should reject ticket for another host", func(t *testing.T) {
+		tok, err := SignTicket(ticket, "evil.example.com", valid, secret)
+		require.NoError(t, err)
+
+		_, err = VerifyTicket(tok, "app.example.com", secret)
+		assert.ErrorIs(t, err, ErrAudience)
+	})
+
+	t.Run("should reject expired ticket", func(t *testing.T) {
+		tok, err := SignTicket(ticket, "app.example.com", time.Now().Add(-time.Second), secret)
+		require.NoError(t, err)
+
+		_, err = VerifyTicket(tok, "app.example.com", secret)
+		assert.ErrorIs(t, err, ErrExpired)
+	})
+
+	t.Run("should reject host token", func(t *testing.T) {
+		tok, err := SignHostToken(userinfo, "app.example.com", valid, secret)
+		require.NoError(t, err)
+
+		_, err = VerifyTicket(tok, "app.example.com", secret)
+		assert.ErrorIs(t, err, ErrKind)
+	})
+
+	t.Run("should reject ticket without nonce", func(t *testing.T) {
+		tok, err := SignTicket(Ticket{User: userinfo, Redirect: "https://app.example.com/"}, "app.example.com", valid, secret)
+		require.NoError(t, err)
+
+		_, err = VerifyTicket(tok, "app.example.com", secret)
+		assert.Error(t, err)
+	})
+}
+
 func Test_verifyToken(t *testing.T) {
 	secret := []byte("secret")
 	userinfo := m{
