@@ -9,8 +9,6 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-const userinfoKey = "tfa"
-
 const (
 	claimKind     = "typ"
 	claimUser     = "usr"
@@ -151,32 +149,4 @@ func verify(tok, aud, kind string, secret []byte) (jwt.MapClaims, error) {
 		return nil, ErrKind
 	}
 	return claims, nil
-}
-
-// SignToken signs a new token for recording this authentication.
-func SignToken(object any, expiryUnixSeconds int64, secret []byte) (string, error) {
-	claims := jwt.MapClaims{
-		"exp":       expiryUnixSeconds,
-		userinfoKey: object,
-	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(secret)
-}
-
-var jwtParser = jwt.NewParser(jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
-
-func VerifyToken(token string, secret []byte) (any, error) {
-	tok, err := jwtParser.Parse(token, func(token *jwt.Token) (any, error) { return secret, nil })
-	if err != nil {
-		return "", err
-	}
-	if !tok.Valid { // should be unreachable, but check the field just in case
-		return "", errors.New("invalid token")
-	}
-	mc := tok.Claims.(jwt.MapClaims)
-	object, ok := mc[userinfoKey]
-	if !ok {
-		return "", errors.New("tfa field not found")
-	}
-	return object, nil
 }

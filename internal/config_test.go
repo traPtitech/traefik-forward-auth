@@ -62,12 +62,6 @@ providers:
 			Priority:  -10000,
 			AuthRule:  "True()",
 		},
-		"callback": {
-			Action:    "callback",
-			RouteRule: "Path(`/_oauth`)",
-			Priority:  1,
-			AuthRule:  "True()",
-		},
 		"health": {
 			Action:    "allow",
 			RouteRule: "!HeaderRegexp(`X-Forwarded-Host`, `.+`) && Path(`/healthz`)",
@@ -156,7 +150,7 @@ auth-domains: test.com,test2.com`)
 	c, err := NewConfig(tmpConfigFile)
 	require.Nil(t, err)
 
-	expected1 := []string{"test.com", "test2.com"}
+	expected1 := []AuthDomain{"test.com", "test2.com"}
 	assert.Equal(expected1, c.AuthDomains, "should read comma separated list")
 }
 

@@ -96,10 +96,11 @@ func TestServerAuthHandlerInvalid(t *testing.T) {
 	state, exists := qs["state"]
 	require.True(t, exists)
 	require.Len(t, state, 1)
-	parts := strings.SplitN(state[0], ":", 3)
-	require.Len(t, parts, 3)
-	assert.Equal("google", parts[1])
-	assert.Equal("http://example.com/foo", parts[2])
+	parsed, err := parseAuthState(state[0])
+	require.NoError(t, err)
+	assert.Equal("google", parsed.Provider)
+	assert.Equal("http://example.com/foo", parsed.Redirect)
+	assert.False(parsed.Probe)
 
 	// Should warn as using http without insecure cookie
 	logs := hook.AllEntries()
@@ -113,7 +114,7 @@ func TestServerAuthHandlerInvalid(t *testing.T) {
 	req = newHTTPRequest("GET", "http://example.com/foo")
 	c, err := MakeCookie(req, "test@example.com")
 	assert.NoError(err)
-	parts = strings.Split(c.Value, ".")
+	parts := strings.Split(c.Value, ".")
 	c.Value = fmt.Sprintf("%s.%s.bad", parts[0], parts[1])
 
 	res, _ = doHttpRequest(req, c)
@@ -146,7 +147,7 @@ func TestServerAuthHandlerExpired(t *testing.T) {
 	// Check for CSRF cookie
 	var cookie *http.Cookie
 	for _, c := range res.Cookies() {
-		if strings.HasPrefix(c.Name, config.CSRFCookieName) {
+		if strings.HasPrefix(c.Name, cookieName(config.CSRFCookieName)) {
 			cookie = c
 		}
 	}
@@ -187,7 +188,7 @@ func TestServerAuthHandlerMultipleCookies_validSecond(t *testing.T) {
 	validCookie, err := MakeCookie(req, m{"email": "test@example.com"})
 	assert.NoError(err)
 
-	invalidCookie := &http.Cookie{Name: config.CookieName, Value: "invalid.token.value"}
+	invalidCookie := &http.Cookie{Name: hostTokenCookieName(), Value: "invalid.token.value"}
 
 	// Add invalid cookie first, then valid cookie
 	req.Header.Add("Cookie", invalidCookie.String())
@@ -208,8 +209,8 @@ func TestServerAuthHandlerMultipleCookies_allInvalid(t *testing.T) {
 	// When all cookies are invalid, the request should be rejected
 	req := newHTTPRequest("GET", "http://example.com/foo")
 
-	invalidCookie1 := &http.Cookie{Name: config.CookieName, Value: "invalid.token.one"}
-	invalidCookie2 := &http.Cookie{Name: config.CookieName, Value: "invalid.token.two"}
+	invalidCookie1 := &http.Cookie{Name: hostTokenCookieName(), Value: "invalid.token.one"}
+	invalidCookie2 := &http.Cookie{Name: hostTokenCookieName(), Value: "invalid.token.two"}
 
 	req.Header.Add("Cookie", invalidCookie1.String())
 	req.Header.Add("Cookie", invalidCookie2.String())
@@ -278,29 +279,44 @@ func TestServerAuthCallback(t *testing.T) {
 	res, _ := doHttpRequest(req, nil)
 	assert.Equal(401, res.StatusCode, "auth callback without cookie shouldn't be authorised")
 
-	// Should catch invalid csrf cookie
 	nonce := "12345678901234567890123456789012"
-	req = newHTTPRequest("GET", "http://example.com/_oauth?state="+nonce+":http://example.com")
-	c := MakeCSRFCookie(req, "nononononononononononononononono")
-	res, _ = doHttpRequest(req, c)
+	callbackRequest := func(state authState) *http.Request {
+		return newHTTPRequest("GET", "http://example.com/_oauth?"+url.Values{"state": {state.String()}}.Encode())
+	}
+
+	// Should catch invalid csrf cookie
+	req = callbackRequest(authState{Nonce: nonce, Provider: "google", Redirect: "http://example.com"})
+	res, _ = doHttpRequest(req, MakeCSRFCookie("nononononononononononononononono"))
 	assert.Equal(401, res.StatusCode, "auth callback with invalid cookie shouldn't be authorised")
 
-	// Should catch invalid provider cookie
-	req = newHTTPRequest("GET", "http://example.com/_oauth?state="+nonce+":invalid:http://example.com")
-	c = MakeCSRFCookie(req, nonce)
-	res, _ = doHttpRequest(req, c)
+	// Should catch invalid provider
+	req = callbackRequest(authState{Nonce: nonce, Provider: "invalid", Redirect: "http://example.com"})
+	res, _ = doHttpRequest(req, MakeCSRFCookie(nonce))
 	assert.Equal(401, res.StatusCode, "auth callback with invalid provider shouldn't be authorised")
 
+	// Should catch redirect to another host
+	req = callbackRequest(authState{Nonce: nonce, Provider: "google", Redirect: "http://other.com"})
+	res, _ = doHttpRequest(req, MakeCSRFCookie(nonce))
+	assert.Equal(401, res.StatusCode, "auth callback with redirect to another host shouldn't be authorised")
+
 	// Should redirect valid request
-	req = newHTTPRequest("GET", "http://example.com/_oauth?state="+nonce+":google:http://example.com")
-	c = MakeCSRFCookie(req, nonce)
-	res, _ = doHttpRequest(req, c)
+	req = callbackRequest(authState{Nonce: nonce, Provider: "google", Redirect: "http://example.com"})
+	res, _ = doHttpRequest(req, MakeCSRFCookie(nonce))
 	require.Equal(307, res.StatusCode, "valid auth callback should be allowed")
 
 	fwd, _ := res.Location()
 	assert.Equal("http", fwd.Scheme, "valid request should be redirected to return url")
 	assert.Equal("example.com", fwd.Host, "valid request should be redirected to return url")
 	assert.Equal("", fwd.Path, "valid request should be redirected to return url")
+
+	var hostToken *http.Cookie
+	for _, c := range res.Cookies() {
+		if c.Name == hostTokenCookieName() {
+			hostToken = c
+		}
+	}
+	require.NotNil(hostToken, "overlay mode should set the host token directly")
+	assert.Equal("", hostToken.Domain)
 }
 
 func TestServerAuthCallbackExchangeFailure(t *testing.T) {
@@ -322,8 +338,9 @@ func TestServerAuthCallbackExchangeFailure(t *testing.T) {
 	}
 
 	// Should handle failed code exchange
-	req := newHTTPRequest("GET", "http://example.com/_oauth?state=12345678901234567890123456789012:google:http://example.com")
-	c := MakeCSRFCookie(req, "12345678901234567890123456789012")
+	state := authState{Nonce: "12345678901234567890123456789012", Provider: "google", Redirect: "http://example.com"}
+	req := newHTTPRequest("GET", "http://example.com/_oauth?"+url.Values{"state": {state.String()}}.Encode())
+	c := MakeCSRFCookie(state.Nonce)
 	res, _ := doHttpRequest(req, c)
 	assert.Equal(503, res.StatusCode, "auth callback should handle failed code exchange")
 }
@@ -349,8 +366,9 @@ func TestServerAuthCallbackUserFailure(t *testing.T) {
 	}
 
 	// Should handle failed user request
-	req := newHTTPRequest("GET", "http://example.com/_oauth?state=12345678901234567890123456789012:google:http://example.com")
-	c := MakeCSRFCookie(req, "12345678901234567890123456789012")
+	state := authState{Nonce: "12345678901234567890123456789012", Provider: "google", Redirect: "http://example.com"}
+	req := newHTTPRequest("GET", "http://example.com/_oauth?"+url.Values{"state": {state.String()}}.Encode())
+	c := MakeCSRFCookie(state.Nonce)
 	res, _ := doHttpRequest(req, c)
 	assert.Equal(503, res.StatusCode, "auth callback should handle failed user request")
 }
@@ -373,7 +391,7 @@ func TestServerLogout(t *testing.T) {
 	// Check for cookie
 	var cookie *http.Cookie
 	for _, c := range res.Cookies() {
-		if c.Name == config.CookieName {
+		if c.Name == hostTokenCookieName() {
 			cookie = c
 		}
 	}
@@ -388,7 +406,7 @@ func TestServerLogout(t *testing.T) {
 	// Check for cookie
 	cookie = nil
 	for _, c := range res.Cookies() {
-		if c.Name == config.CookieName {
+		if c.Name == hostTokenCookieName() {
 			cookie = c
 		}
 	}

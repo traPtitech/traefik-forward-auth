@@ -3,17 +3,10 @@ package tfa
 import (
 	"net/http"
 	"net/http/httptest"
-	"net/url"
-	"strings"
 	"testing"
-	"time"
-
-	"github.com/traPtitech/traefik-forward-auth/internal/token"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/traPtitech/traefik-forward-auth/internal/provider"
 )
 
 /**
@@ -59,298 +52,136 @@ func TestGetRedirectURI(t *testing.T) {
 	}
 }
 
-func TestAuthValidateRedirect(t *testing.T) {
-	assert := assert.New(t)
+func TestValidateRedirect(t *testing.T) {
 	initTestConfig()
+	config.AuthHost = []string{"auth.example.com"}
+	config.AuthDomains = []AuthDomain{"example.com"}
 
-	newRedirectRequest := func(urlStr string) *http.Request {
-		u, err := url.Parse(urlStr)
-		assert.Nil(err)
-
-		r, _ := http.NewRequest("GET", urlStr, nil)
-		r.Header.Add("X-Forwarded-Proto", u.Scheme)
-		r.Header.Add("X-Forwarded-Host", u.Host)
-		r.Header.Add("X-Forwarded-Uri", u.RequestURI())
-
+	newRequest := func(host string) *http.Request {
+		r := httptest.NewRequest("GET", "https://"+host+"/_oauth", nil)
+		r.Host = host
 		return r
 	}
 
-	errStr := "redirect host does not match request host (must match when not using auth host)"
-
-	_, err := ValidateRedirect(
-		newRedirectRequest("http://app.example.com/_oauth?state=123"),
-		"http://app.example.com.bad.com",
-	)
-	if assert.Error(err) {
-		assert.Equal(errStr, err.Error(), "Should not allow redirect to subdomain")
+	sameHost := []struct {
+		redirect string
+		ok       bool
+	}{
+		{"https://app.example.com/profile", true},
+		{"https://app.example.com.bad.com/", false},
+		{"https://example.com/", false},
+		{"javascript://app.example.com/", false},
+		{"/relative", false},
+	}
+	for _, cc := range sameHost {
+		_, err := validateSameHostRedirect(newRequest("app.example.com"), cc.redirect)
+		assert.Equal(t, cc.ok, err == nil, "same host: %s", cc.redirect)
 	}
 
-	_, err = ValidateRedirect(
-		newRedirectRequest("http://app.example.com/_oauth?state=123"),
-		"http://app.example.combad.com",
-	)
-	if assert.Error(err) {
-		assert.Equal(errStr, err.Error(), "Should not allow redirect to overlapping domain")
+	authHost := []struct {
+		host     string
+		redirect string
+		ok       bool
+	}{
+		{"auth.example.com", "https://app.example.com/profile", true},
+		{"auth.example.com", "https://example.com/", true},
+		{"auth.example.com", "https://deep.app.example.com/", true},
+		{"auth.example.com", "https://evilexample.com/", false},
+		{"auth.example.com", "https://app.example.com.bad.com/", false},
+		{"auth.example.com", "https://other.org/", false},
+		{"auth.example.com", "ftp://app.example.com/", false},
+		{"auth.example.com", "http://app.example.com/", false},
+		{"auth.other.org", "https://auth.other.org/", false},
 	}
-
-	_, err = ValidateRedirect(
-		newRedirectRequest("http://app.example.com/_oauth?state=123"),
-		"http://example.com",
-	)
-	if assert.Error(err) {
-		assert.Equal(errStr, err.Error(), "Should not allow redirect from subdomain")
+	for _, cc := range authHost {
+		_, err := validateAuthHostRedirect(newRequest(cc.host), cc.redirect)
+		assert.Equal(t, cc.ok, err == nil, "auth host %s: %s", cc.host, cc.redirect)
 	}
+}
 
-	_, err = ValidateRedirect(
-		newRedirectRequest("http://app.example.com/_oauth?state=123"),
-		"http://app.example.com/profile",
-	)
-	assert.Nil(err, "Should allow same domain")
+func TestAuthHostFor(t *testing.T) {
+	initTestConfig()
 
-	//
-	// With Auth Host
-	//
+	_, ok := authHostFor("app.example.com")
+	assert.False(t, ok, "no auth host")
+
 	config.AuthHost = []string{"auth.example.com"}
-	config.AuthDomains = []AuthDomain{"example.com"}
-	errStr = "redirect host does not match any expected hosts (should match cookie domain when using auth host)"
+	config.AuthDomains = []AuthDomain{"example.com", "example.org"}
+	authHost, ok := authHostFor("app.example.com")
+	assert.True(t, ok)
+	assert.Equal(t, "auth.example.com", authHost)
 
-	_, err = ValidateRedirect(
-		newRedirectRequest("http://app.example.com/_oauth?state=123"),
-		"http://app.example.com.bad.com",
-	)
-	if assert.Error(err) {
-		assert.Equal(errStr, err.Error(), "Should not allow redirect to subdomain")
-	}
+	_, ok = authHostFor("app.example.org")
+	assert.False(t, ok, "host in an auth domain without an auth host")
 
-	_, err = ValidateRedirect(
-		newRedirectRequest("http://app.example.com/_oauth?state=123"),
-		"http://app.example.combad.com",
-	)
-	if assert.Error(err) {
-		assert.Equal(errStr, err.Error(), "Should not allow redirect to overlapping domain")
-	}
-
-	_, err = ValidateRedirect(
-		newRedirectRequest("http://auth.example.com/_oauth?state=123"),
-		"http://app.example.com/profile",
-	)
-	assert.Nil(err, "Should allow between subdomains when using auth host")
-
-	_, err = ValidateRedirect(
-		newRedirectRequest("http://auth.example.com/_oauth?state=123"),
-		"http://auth.example.com/profile",
-	)
-	assert.Nil(err, "Should allow same domain when using auth host")
-
-	_, err = ValidateRedirect(
-		newRedirectRequest("http://auth.example.com/_oauth?state=123"),
-		"http://example.com/profile",
-	)
-	assert.Nil(err, "Should allow from subdomain when using auth host")
+	_, ok = authHostFor("another.com")
+	assert.False(t, ok, "host outside auth domains")
 }
 
 func TestRedirectUri(t *testing.T) {
-	assert := assert.New(t)
 	initTestConfig()
+	config.AuthHost = []string{"auth.example.com"}
+	config.AuthDomains = []AuthDomain{"example.com"}
 
 	r := httptest.NewRequest("GET", "http://app.example.com/hello", nil)
-	r.Header.Add("X-Forwarded-Proto", "http")
-
-	//
-	// No Auth Host
-	//
-	uri, err := url.Parse(redirectUri(r))
-	assert.Nil(err)
-	assert.Equal("http", uri.Scheme)
-	assert.Equal("app.example.com", uri.Host)
-	assert.Equal("/_oauth", uri.Path)
-
-	//
-	// With Auth URL but no matching cookie domain
-	// - will not use auth host
-	//
-	config.AuthHost = []string{"auth.example.com"}
-
-	uri, err = url.Parse(redirectUri(r))
-	assert.Nil(err)
-	assert.Equal("http", uri.Scheme)
-	assert.Equal("app.example.com", uri.Host)
-	assert.Equal("/_oauth", uri.Path)
-
-	//
-	// With correct Auth URL + cookie domain
-	//
-	config.AuthHost = []string{"auth.example.com"}
-	config.AuthDomains = []AuthDomain{"example.com"}
-
-	// Check url
-	uri, err = url.Parse(redirectUri(r))
-	assert.Nil(err)
-	assert.Equal("http", uri.Scheme)
-	assert.Equal("auth.example.com", uri.Host)
-	assert.Equal("/_oauth", uri.Path)
-
-	//
-	// With Auth URL + cookie domain, but from different domain
-	// - will not use auth host
-	//
-	r = httptest.NewRequest("GET", "https://another.com/hello", nil)
 	r.Header.Add("X-Forwarded-Proto", "https")
-
-	config.AuthHost = []string{"auth.example.com"}
-	config.AuthDomains = []AuthDomain{"example.com"}
-
-	// Check url
-	uri, err = url.Parse(redirectUri(r))
-	assert.Nil(err)
-	assert.Equal("https", uri.Scheme)
-	assert.Equal("another.com", uri.Host)
-	assert.Equal("/_oauth", uri.Path)
-}
-
-func TestAuthMakeCookie(t *testing.T) {
-	assert := assert.New(t)
-	initTestConfig()
-
-	r, _ := http.NewRequest("GET", "http://app.example.com", nil)
-	r.Header.Add("X-Forwarded-Host", "app.example.com")
-
-	c, err := MakeCookie(r, "test@example.com")
-	assert.NoError(err)
-	assert.Equal("_forward_auth", c.Name)
-	parts := strings.Split(c.Value, ".")
-	assert.Len(parts, 3, "cookie should be 3 parts")
-	_, err = token.VerifyToken(c.Value, config.secretBytes)
-	assert.Nil(err, "should generate valid cookie")
-	assert.Equal("/", c.Path)
-	assert.Equal("app.example.com", c.Domain)
-	assert.True(c.Secure)
-
-	expires := time.Now().Local().Add(config.lifetimeDuration)
-	assert.WithinDuration(expires, c.Expires, 10*time.Second)
-
-	config.CookieName = "testname"
-	config.InsecureCookie = true
-	c, err = MakeCookie(r, "test@example.com")
-	assert.NoError(err)
-	assert.Equal("testname", c.Name)
-	assert.False(c.Secure)
+	assert.Equal(t, "https://app.example.com/_oauth", redirectUri(r), "callback is on the receiving host")
 }
 
 func TestAuthMakeCSRFCookie(t *testing.T) {
-	assert := assert.New(t)
 	initTestConfig()
 
-	r, _ := http.NewRequest("GET", "http://app.example.com", nil)
-	r.Header.Add("X-Forwarded-Host", "app.example.com")
+	nonce := "12345678901234567890123456789012"
+	c := MakeCSRFCookie(nonce)
+	assert.Equal(t, "__Host-_forward_auth_csrf_"+hashNonce(nonce)[:6], c.Name)
+	assert.Equal(t, nonce, c.Value)
+	assert.Equal(t, "", c.Domain)
+	assert.True(t, c.Secure)
 
-	// No cookie domain or auth url
-	c := MakeCSRFCookie(r, "12345678901234567890123456789012")
-	assert.Equal("_forward_auth_csrf_123456", c.Name)
-	assert.Equal("app.example.com", c.Domain)
+	r := httptest.NewRequest("GET", "https://app.example.com/", nil)
+	r.AddCookie(&http.Cookie{Name: c.Name, Value: "00000000000000000000000000000000"})
+	r.AddCookie(&http.Cookie{Name: c.Name, Value: c.Value})
+	found, err := FindCSRFCookie(r, hashNonce(nonce))
+	require.NoError(t, err)
+	assert.Equal(t, nonce, found.Value)
 
-	// With cookie domain but no auth url
-	config.AuthDomains = []AuthDomain{"example.com"}
-	c = MakeCSRFCookie(r, "12222278901234567890123456789012")
-	assert.Equal("_forward_auth_csrf_122222", c.Name)
-	assert.Equal("app.example.com", c.Domain)
+	_, err = FindCSRFCookie(r, hashNonce("another"))
+	assert.Error(t, err)
 
-	// With cookie domain and auth url
-	config.AuthHost = []string{"auth.example.com"}
-	config.AuthDomains = []AuthDomain{"example.com"}
-	c = MakeCSRFCookie(r, "12333378901234567890123456789012")
-	assert.Equal("_forward_auth_csrf_123333", c.Name)
-	assert.Equal("example.com", c.Domain)
+	cleared := ClearCSRFCookie(c)
+	assert.Equal(t, c.Name, cleared.Name)
+	assert.Equal(t, "", cleared.Value)
 }
 
-func TestAuthClearCSRFCookie(t *testing.T) {
-	assert := assert.New(t)
-	initTestConfig()
-
-	r, _ := http.NewRequest("GET", "http://example.com", nil)
-
-	c := ClearCSRFCookie(r, &http.Cookie{Name: "someCsrfCookie"})
-	assert.Equal("someCsrfCookie", c.Name)
-	if c.Value != "" {
-		t.Error("ClearCSRFCookie should create cookie with empty value")
+func TestAuthState(t *testing.T) {
+	nonce := "12345678901234567890123456789012"
+	state := authState{
+		Nonce:        nonce,
+		Provider:     "oidc",
+		Probe:        true,
+		AppNonceHash: hashNonce("app"),
+		Redirect:     "https://app.example.com/path?a=b:c",
 	}
-}
+	parsed, err := parseAuthState(state.String())
+	require.NoError(t, err)
+	assert.Equal(t, state, parsed)
 
-func TestAuthValidateCSRFCookie(t *testing.T) {
-	assert := assert.New(t)
-	initTestConfig()
+	state = authState{Nonce: nonce, Provider: "google", Redirect: "https://app.example.com/"}
+	parsed, err = parseAuthState(state.String())
+	require.NoError(t, err)
+	assert.Equal(t, state, parsed)
 
-	c := &http.Cookie{}
-	state := ""
-
-	// Should require 32 char string
-	state = ""
-	c.Value = ""
-	valid, _, _, err := ValidateCSRFCookie(c, state)
-	assert.False(valid)
-	if assert.Error(err) {
-		assert.Equal("invalid CSRF cookie value", err.Error())
+	for _, invalid := range []string{
+		"",
+		nonce + ":google:0::",
+		"short:google:0::https://app.example.com/",
+		nonce + ":google:2::https://app.example.com/",
+		nonce + ":google:0:nothex:https://app.example.com/",
+		nonce + ":google:https://app.example.com/",
+	} {
+		_, err := parseAuthState(invalid)
+		assert.Error(t, err, invalid)
 	}
-	c.Value = "123456789012345678901234567890123"
-	valid, _, _, err = ValidateCSRFCookie(c, state)
-	assert.False(valid)
-	if assert.Error(err) {
-		assert.Equal("invalid CSRF cookie value", err.Error())
-	}
-
-	// Should require provider
-	state = "12345678901234567890123456789012:99"
-	c.Value = "12345678901234567890123456789012"
-	valid, _, _, err = ValidateCSRFCookie(c, state)
-	assert.False(valid)
-	if assert.Error(err) {
-		assert.Equal("invalid CSRF state format", err.Error())
-	}
-
-	// Should allow valid state
-	state = "12345678901234567890123456789012:p99:url123"
-	c.Value = "12345678901234567890123456789012"
-	valid, provider, redirect, err := ValidateCSRFCookie(c, state)
-	assert.True(valid, "valid request should return valid")
-	assert.Nil(err, "valid request should not return an error")
-	assert.Equal("p99", provider, "valid request should return correct provider")
-	assert.Equal("url123", redirect, "valid request should return correct redirect")
-}
-
-func TestValidateState(t *testing.T) {
-	assert := assert.New(t)
-
-	// Should require valid state
-	state := "12345678901234567890123456789012:"
-	err := ValidateState(state)
-	if assert.Error(err) {
-		assert.Equal("invalid CSRF state value", err.Error())
-	}
-	// Should pass this state
-	state = "12345678901234567890123456789012:p99:url123"
-	err = ValidateState(state)
-	assert.Nil(err, "valid request should not return an error")
-}
-
-func TestMakeState(t *testing.T) {
-	assert := assert.New(t)
-
-	redirect := "http://example.com/hello"
-
-	// Test with google
-	p := provider.Google{}
-	state := MakeState(redirect, &p, "nonce")
-	assert.Equal("nonce:google:http://example.com/hello", state)
-
-	// Test with OIDC
-	p2 := provider.OIDC{}
-	state = MakeState(redirect, &p2, "nonce")
-	assert.Equal("nonce:oidc:http://example.com/hello", state)
-
-	// Test with Generic OAuth
-	p3 := provider.GenericOAuth{}
-	state = MakeState(redirect, &p3, "nonce")
-	assert.Equal("nonce:generic-oauth:http://example.com/hello", state)
 }
 
 func TestAuthNonce(t *testing.T) {
@@ -366,21 +197,21 @@ func TestAuthNonce(t *testing.T) {
 	assert.NotEqual(nonce1, nonce2, "nonce should not be equal")
 }
 
-func TestAuthDomainMatch(t *testing.T) {
+func TestAuthDomainContains(t *testing.T) {
 	assert := assert.New(t)
-	cd := "example.com"
+	d := AuthDomain("example.com")
 
 	// Exact should match
-	assert.True(AuthDomainMatch(cd, "example.com"), "exact domain should match")
+	assert.True(d.Contains("example.com"), "exact domain should match")
 
 	// Subdomain should match
-	assert.True(AuthDomainMatch(cd, "test.example.com"), "subdomain should match")
-	assert.True(AuthDomainMatch(cd, "twolevels.test.example.com"), "subdomain should match")
-	assert.True(AuthDomainMatch(cd, "many.many.levels.test.example.com"), "subdomain should match")
+	assert.True(d.Contains("test.example.com"), "subdomain should match")
+	assert.True(d.Contains("twolevels.test.example.com"), "subdomain should match")
+	assert.True(d.Contains("many.many.levels.test.example.com"), "subdomain should match")
 
 	// Derived domain should not match
-	assert.False(AuthDomainMatch(cd, "testexample.com"), "derived domain should not match")
+	assert.False(d.Contains("testexample.com"), "derived domain should not match")
 
 	// Other domain should not match
-	assert.False(AuthDomainMatch(cd, "test.com"), "other domain should not match")
+	assert.False(d.Contains("test.com"), "other domain should not match")
 }
