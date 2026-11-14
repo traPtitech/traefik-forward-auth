@@ -218,24 +218,6 @@ func TestServerAuthHandlerMultipleCookies_allInvalid(t *testing.T) {
 	assert.Equal(307, res.StatusCode, "request with all invalid cookies should be redirected")
 }
 
-func TestGetCookiesByName(t *testing.T) {
-	assert := assert.New(t)
-
-	req := httptest.NewRequest("GET", "http://example.com", nil)
-	req.Header.Add("Cookie", (&http.Cookie{Name: "target", Value: "first"}).String())
-	req.Header.Add("Cookie", (&http.Cookie{Name: "other", Value: "ignore"}).String())
-	req.Header.Add("Cookie", (&http.Cookie{Name: "target", Value: "second"}).String())
-
-	cookies := getCookiesByName(req, "target")
-	assert.Len(cookies, 2, "should return all cookies matching the name")
-	assert.Equal("first", cookies[0].Value)
-	assert.Equal("second", cookies[1].Value)
-
-	// No match
-	cookies = getCookiesByName(req, "nonexistent")
-	assert.Len(cookies, 0, "should return empty slice for no match")
-}
-
 func TestServerAuthHandlerTrustedIP_trusted(t *testing.T) {
 	assert := assert.New(t)
 	initTestConfig()

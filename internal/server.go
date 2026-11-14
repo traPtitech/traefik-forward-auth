@@ -100,22 +100,10 @@ func (s *Server) allowHandler(rule string) http.HandlerFunc {
 	}
 }
 
-// getCookiesByName retrieves all cookies by name.
-func getCookiesByName(r *http.Request, name string) []*http.Cookie {
-	var matchingCookies []*http.Cookie
-	cookies := r.Cookies()
-	for _, cookie := range cookies {
-		if cookie.Name == name {
-			matchingCookies = append(matchingCookies, cookie)
-		}
-	}
-	return matchingCookies
-}
-
 func GetUserinfoFromCookie(r *http.Request) any {
 	// Check all cookies in case there are conflicting cookies
 	// (e.g. conflicting cookie from parent domain for "auth host mode")
-	cookies := getCookiesByName(r, config.CookieName)
+	cookies := r.CookiesNamed(config.CookieName)
 
 	for _, c := range cookies {
 		object, err := token.VerifyToken(c.Value, config.secretBytes)
