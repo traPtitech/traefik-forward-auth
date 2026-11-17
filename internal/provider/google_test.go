@@ -68,7 +68,7 @@ func TestGoogleGetLoginURL(t *testing.T) {
 	}
 
 	// Check url
-	uri, err := url.Parse(p.GetLoginURL("http://example.com/_oauth", "state", false))
+	uri, err := url.Parse(p.GetLoginURL("http://example.com/_oauth", "state", PromptConfigured))
 	assert.Nil(err)
 	assert.Equal("https", uri.Scheme)
 	assert.Equal("google.com", uri.Host)
@@ -85,6 +85,14 @@ func TestGoogleGetLoginURL(t *testing.T) {
 		"state":         []string{"state"},
 	}
 	assert.Equal(expectedQs, qs)
+
+	uri, err = url.Parse(p.GetLoginURL("http://example.com/_oauth", "state", PromptOmit))
+	assert.Nil(err)
+	assert.False(uri.Query().Has("prompt"), "PromptOmit should not send the configured prompt")
+
+	uri, err = url.Parse(p.GetLoginURL("http://example.com/_oauth", "state", PromptNone))
+	assert.Nil(err)
+	assert.Equal("none", uri.Query().Get("prompt"))
 }
 
 func TestGoogleExchangeCode(t *testing.T) {

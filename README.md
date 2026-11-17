@@ -24,6 +24,10 @@ Further customization notes:
 - Use JWT (Json Web Token) instead of re-inventing the original token format.
 - Dynamic mapping of userinfo values to header values.
 - More expressive traefik-like language to replace the 'whitelist' and email 'domain' user filtering.
+- Auth cookies are scoped to a single host, even in auth host mode.
+    - The token in the cookie names the host it was issued for, and is rejected on any other host.
+    - `cookie-domains` is replaced by `auth-domains`, which only decides which auth host a host logs in via.
+    - The auth host hands over the login to each host with a short-lived ticket. See [Auth Host Mode](#auth-host-mode).
 
 Despite quite a few breaking changes from upstream, it still supports the same basic usage,
 and even more advanced dynamic usages.
@@ -60,7 +64,7 @@ It seems to be a better bet to match against the `X-Forwarded-For` header.
 - Supports multiple domains/subdomains by dynamically generating redirect_uri's
 - Allows authentication to be selectively applied/bypassed based on request parameters (see `rules` in [Configuration](#configuration))
 - Supports use of centralised authentication host/redirect_uri (see `auth-host` in [Configuration](#configuration))
-- Allows authentication to persist across multiple domains (see [Cookie Domains](#cookie-domains))
+- Allows a single login with the provider to be reused across many subdomains (see [Auth Host Mode](#auth-host-mode))
 - Supports extended authentication beyond Google token lifetime (see: `lifetime` in [Configuration](#configuration))
 
 # Contents
@@ -216,20 +220,20 @@ They are parsed in the following precedence order.
    url-path: _oauthpath
    ```
 
-- `cookie-domains`
+- `auth-domains`
 
-  When set, if a user successfully completes authentication, then if the host of the original request requiring authentication is a subdomain of a given cookie domain, then the authentication cookie will be set for the higher level cookie domain. This means that a cookie can allow access to multiple subdomains without re-authentication. Can be specified multiple times.
+  Domains whose hosts log in via the `auth-host` on the same domain. A host matches a domain when it is the domain itself or one of its subdomains. Can be specified multiple times.
 
    For example:
    ```yaml
-   cookie-domains:
+   auth-domains:
      - "example.com"
      - "test.org"
    ```
 
-   For example, if the cookie domain `test.com` has been set, and a request comes in on `app1.test.com`, following authentication the auth cookie will be set for the whole `test.com` domain. As such, if another request is forwarded for authentication from `app2.test.com`, the original cookie will be sent and so the request will be allowed without further authentication.
+   For example, if `auth-domains` is `test.com` and `auth-host` is `auth.test.com`, a request on `app1.test.com` logs in via `auth.test.com`. The auth cookie is still set on `app1.test.com` only, and is not accepted on `app2.test.com`; `app2.test.com` gets its own cookie through the auth host, without showing the provider's login page again as long as the provider remembers the user.
 
-   Beware however, if using cookie domains whilst running multiple instances of traefik/traefik-forward-auth for the same domain, the cookies will clash. You can fix this by using a different `cookie-name` in each host/cluster or by using the same `cookie-secret` in both instances.
+   The auth host only hands over logins to hosts in its own domain, and only over https unless `insecure-cookie` is set.
 
 - `insecure-cookie`
 
@@ -238,12 +242,15 @@ They are parsed in the following precedence order.
 - `cookie-name`
 
    Set the name of the cookie set following successful authentication.
+   Unless `insecure-cookie` is set, the cookie is named with the `__Host-` prefix (e.g. `__Host-_forward_auth`), which keeps other hosts from setting it.
+   The cookie `<cookie-name>_probed` (with the same prefix) records that soft-auth has asked the provider about the user. See [Logging in](#logging-in).
 
    Default: `_forward_auth`
 
 - `csrf-cookie-name`
 
    Set the name of the temporary CSRF cookie set during authentication.
+   The `__Host-` prefix is added in the same way as `cookie-name`.
 
    Default: `_forward_auth_csrf`
 
@@ -255,13 +262,16 @@ They are parsed in the following precedence order.
 
 - `lifetime`
 
-   How long a successful authentication session should last, in seconds.
+   How long a successful authentication session should last on each host, in seconds.
+   After it expires, the host asks the provider again; with a provider that remembers the user, no login page is shown.
 
    Default: `43200` (12 hours)
 
 - `callback-path`
 
    Customise the path that this service uses to handle the callback following authentication.
+   `<callback-path>/authorize` (on the auth host) and `<callback-path>/ticket` (on each host) are also served by this service for [Auth Host Mode](#auth-host-mode).
+   These paths are handled before any `rules`.
 
    Default: `/_oauth`
 
@@ -283,7 +293,6 @@ They are parsed in the following precedence order.
            - `allow`
            - `login`
            - `logout`
-           - `callback`
        - `route-rule` - a rule to match a request, this uses traefik's v3 rule parser for which you can find the documentation here: https://docs.traefik.io/v3.0/routing/routers/#rule, supported values are summarised here:
            - ``Header(`key`, `value`)``
            - ``HeaderRegexp(`key`, `regexp`)``
@@ -324,7 +333,7 @@ They are parsed in the following precedence order.
 
   Specifies the behavior when a request does not match any additionally defined `rules`. 
   
-  Valid options: `auth`, `soft-auth`, `allow`, `login`, `logout`, `callback`
+  Valid options: `auth`, `soft-auth`, `allow`, `login`, `logout`
 
   Default: `auth` (i.e. all requests require authentication)
 
@@ -456,7 +465,7 @@ The user flow will be:
 1. Request to `www.myapp.com/home`
 2. User redirected to Google login
 3. After Google login, user is redirected to `www.myapp.com/_oauth`
-4. Token, user and CSRF cookie is validated (this request in intercepted and is never passed to your application)
+4. Token, user and CSRF cookie is validated, auth cookie is set to `www.myapp.com` (this request in intercepted and is never passed to your application)
 5. User is redirected to `www.myapp.com/home`
 6. Request is allowed
 
@@ -467,23 +476,27 @@ As the hostname in the `redirect_uri` is dynamically generated based on the orig
 This is an optional mode of operation that is useful when dealing with a large number of subdomains, it is activated by using the `auth-host` config option (see [this example docker-compose.yml](examples/traefik-v2/swarm/docker-compose-auth-host.yml) or [this kubernetes example](https://github.com/thomseddon/traefik-forward-auth/tree/master/examples/traefik-v2/kubernetes/advanced-separate-pod)).
 
 For example, if you have a few applications: `app1.test.com`, `app2.test.com`, `appN.test.com`, adding every domain to Google's console can become laborious.
-To utilise an auth host, permit domain level cookies by setting the cookie domain to `test.com` then set the `auth-host` to: `auth.test.com`.
+To utilise an auth host, set `auth-domains` to `test.com` then set the `auth-host` to: `auth.test.com`.
 
 The user flow will then be:
 
 1. Request to `app10.test.com/home/page`
-2. User redirected to Google login
-3. After Google login, user is redirected to `auth.test.com/_oauth`
-4. Token, user and CSRF cookie is validated, auth cookie is set to `test.com`
-5. User is redirected to `app10.test.com/home/page`
-6. Request is allowed
+2. User redirected to `auth.test.com/_oauth/authorize`, with a CSRF cookie set on `app10.test.com`
+3. User redirected to Google login, with a CSRF cookie set on `auth.test.com`
+4. After Google login, user is redirected to `auth.test.com/_oauth`
+5. Token, user and CSRF cookie is validated, and user is redirected to `app10.test.com/_oauth/ticket` with a ticket for `app10.test.com` valid for 30 seconds
+6. Ticket and CSRF cookie is validated, auth cookie is set to `app10.test.com`
+7. User is redirected to `app10.test.com/home/page`
+8. Request is allowed
 
 With this setup, only `auth.test.com` must be permitted in the Google console.
+The auth cookie of `app10.test.com` is not accepted on any other host, so an application on one host cannot reuse the cookies it receives on another host.
+Requests from a page on one host to another host with credentials (e.g. `fetch` with `credentials: "include"`) are not authenticated by the cookie of the page's host; serve such APIs on the same host.
 
 Two criteria must be met for an `auth-host` to be used:
 
-1. Request matches given `cookie-domain`
-2. `auth-host` is also subdomain of same `cookie-domain`
+1. Request matches given `auth-domains`
+2. `auth-host` is also subdomain of same `auth-domains`
 
 Please note: For Auth Host mode to work, you must ensure that requests to your auth-host are routed to the traefik-forward-auth container, as demonstrated with the service labels in the [docker-compose-auth.yml](examples/traefik-v2/swarm/docker-compose-auth-host.yml) example and the [ingressroute resource](examples/traefik-v2/kubernetes/advanced-separate-pod/traefik-forward-auth/ingress.yaml) in a kubernetes example.
 
@@ -496,13 +509,16 @@ This action only makes sense for the `soft-auth` mode.
 
 You can set `redirect` query parameter to redirect on login (defaults to `/`).
 
+In `soft-auth` mode, the first page navigation (a `GET` request with `Sec-Fetch-Mode: navigate` and `Sec-Fetch-Dest: document`) on a host without an auth cookie asks the provider with `prompt=none` whether the user is logged in. If so, the user is logged in without any page shown; otherwise the request comes back and passes anonymously. The `<cookie-name>_probed` cookie records that the provider has been asked, and later requests pass anonymously without asking again until the cookie expires after `lifetime` or the user logs in explicitly. The cookie is set before asking, so it also stays when the login fails after the provider answers (e.g. the code exchange fails); the user can still log in explicitly. Other requests without an auth cookie pass anonymously without asking.
+
 ### Logging Out
 
 The service provides additional "mode" to clear a users session and "log them out".
 This behavior is achieved by setting "rules.<name>.action" option to `logout`.
 
 You can set `redirect` query parameter to redirect on logout (defaults to `/`).
-Note that the user will not have a valid auth cookie after being logged out.
+Note that the user will not have a valid auth cookie on this host after being logged out. Other hosts keep their own cookies.
+In `soft-auth` mode, the user is not logged in again automatically on this host for `lifetime` after logging out, unless logging in explicitly. Logins in progress on this host are cancelled.
 
 Note: This only clears the auth cookie from the users browser and as this service is stateless, it does not invalidate the cookie against future use. So if the cookie was recorded, for example, it could continue to be used for the duration of the cookie lifetime.
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -47,15 +48,21 @@ func serve() {
 // sign mode
 func sign() {
 	// Check arg counts
-	if len(os.Args) < 4 {
-		fmt.Printf("Usage: %v sign <userinfo json> <ttl-in-seconds> [options...]\n", os.Args[0])
+	if len(os.Args) < 5 {
+		fmt.Printf("Usage: %v sign <host> <userinfo json> <ttl-in-seconds> [options...]\n", os.Args[0])
 		os.Exit(1)
 	}
 
-	cfg, _ := initConfigs(os.Args[4:])
+	cfg, _ := initConfigs(os.Args[5:])
 
-	userinfoStr := os.Args[2]
-	ttlStr := os.Args[3]
+	host := os.Args[2]
+	// The server compares the audience with the request host without its port.
+	if _, _, err := net.SplitHostPort(host); err == nil {
+		fmt.Printf("Host must not include a port: %s\n", host)
+		return
+	}
+	userinfoStr := os.Args[3]
+	ttlStr := os.Args[4]
 
 	var userinfo any
 	err := json.Unmarshal([]byte(userinfoStr), &userinfo)
@@ -78,8 +85,8 @@ func sign() {
 		return
 	}
 
-	expiry := time.Now().Unix() + int64(ttl)
-	tok := lo.Must(token.SignToken(userinfo, expiry, []byte(cfg.Secret)))
+	expiry := time.Now().Add(time.Duration(ttl) * time.Second)
+	tok := lo.Must(token.SignHostToken(userinfo, host, expiry, []byte(cfg.Secret)))
 	fmt.Println(tok)
 }
 

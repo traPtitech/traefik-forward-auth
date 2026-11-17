@@ -2,15 +2,29 @@ package tfa
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
-	"github.com/traPtitech/traefik-forward-auth/internal/provider"
 	"github.com/traPtitech/traefik-forward-auth/internal/token"
+)
+
+const (
+	authorizePathSuffix = "/authorize"
+	ticketPathSuffix    = "/ticket"
+
+	// ticketLifetime bounds how long a ticket in a redirect URL stays usable.
+	ticketLifetime = 30 * time.Second
+	csrfLifetime   = time.Hour
+
+	hostOnlyCookiePrefix = "__Host-"
 )
 
 // Request Validation
@@ -53,37 +67,55 @@ func ValidateLoginRedirect(r *http.Request, redirect string) (*url.URL, error) {
 	return u, nil
 }
 
-// ValidateRedirect validates that the given redirect is valid and permitted for
-// the given request
-func ValidateRedirect(r *http.Request, redirect string) (*url.URL, error) {
-	redirectURL, err := url.Parse(redirect)
-
+func parseHTTPURL(redirect string) (*url.URL, error) {
+	u, err := url.Parse(redirect)
 	if err != nil {
 		return nil, errors.New("unable to parse redirect")
 	}
-
-	if redirectURL.Scheme != "http" && redirectURL.Scheme != "https" {
+	if u.Scheme != "http" && u.Scheme != "https" {
 		return nil, errors.New("invalid redirect URL scheme")
 	}
+	return u, nil
+}
 
-	// If we're using an auth domain?
-	if use, base, _ := useAuthDomain(r); use {
-		// If we are using an auth domain, they redirect must share a common
-		// suffix with the requested redirect
-		if !strings.HasSuffix(redirectURL.Host, base) {
-			return nil, errors.New("redirect host does not match any expected hosts (should match cookie domain when using auth host)")
-		}
-	} else {
-		// If not, we should only ever redirect to the same domain
-		if redirectURL.Host != r.Header.Get("X-Forwarded-Host") {
-			return nil, errors.New("redirect host does not match request host (must match when not using auth host)")
-		}
+// validateSameHostRedirect accepts an absolute http(s) URL on the request host.
+func validateSameHostRedirect(r *http.Request, redirect string) (*url.URL, error) {
+	u, err := parseHTTPURL(redirect)
+	if err != nil {
+		return nil, err
 	}
+	if u.Host != r.Host {
+		return nil, errors.New("redirect host does not match request host")
+	}
+	return u, nil
+}
 
-	return redirectURL, nil
+// validateAuthHostRedirect accepts an absolute URL on a host that the auth host r.Host serves,
+// i.e. the auth domain of r.Host itself or one of its subdomains.
+// The URL must be https unless insecure-cookie is set, because the ticket for the host is sent with the same scheme.
+func validateAuthHostRedirect(r *http.Request, redirect string) (*url.URL, error) {
+	u, err := parseHTTPURL(redirect)
+	if err != nil {
+		return nil, err
+	}
+	if !config.InsecureCookie && u.Scheme != "https" {
+		return nil, errors.New("redirect must be https")
+	}
+	domain, ok := config.authDomainOf(r.Host)
+	if !ok || !domain.Contains(hostname(u.Host)) {
+		return nil, errors.New("redirect host is not served by this auth host")
+	}
+	return u, nil
 }
 
 // Utility methods
+
+func hostname(host string) string {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		return h
+	}
+	return host
+}
 
 // Get the request base from forwarded request
 func redirectBase(r *http.Request) string {
@@ -92,149 +124,210 @@ func redirectBase(r *http.Request) string {
 
 // Return url
 func currentUrl(r *http.Request) string {
-	return fmt.Sprintf("%s%s", redirectBase(r), r.URL.Path)
+	return redirectBase(r) + r.URL.RequestURI()
 }
 
-// Get oauth redirect uri
+// Get oauth redirect uri: the callback on the host that receives the provider's response.
 func redirectUri(r *http.Request) string {
-	if use, _, authHost := useAuthDomain(r); use {
-		p := r.Header.Get("X-Forwarded-Proto")
-		return fmt.Sprintf("%s://%s%s", p, authHost, config.CallbackPath)
-	}
-
-	return fmt.Sprintf("%s%s", redirectBase(r), config.CallbackPath)
+	return redirectBase(r) + config.CallbackPath
 }
 
-// Should we use auth host + what it is
-func useAuthDomain(r *http.Request) (use bool, cookieHost string, authHost string) {
-	if len(config.AuthHost) == 0 {
-		return
+// authHostFor returns the auth host through which host logs in.
+// It fails when host belongs to no auth domain, or no auth host belongs to the same one.
+func authHostFor(host string) (string, bool) {
+	domain, ok := config.authDomainOf(host)
+	if !ok {
+		return "", false
 	}
-
-	// Does the request match a given cookie domain?
-	reqMatch, reqCookieHost := config.matchCookieDomains(r.Host)
-	if !reqMatch {
-		return
-	}
-
-	// Do any of the auth hosts match a cookie domain?
 	for _, authHost := range config.AuthHost {
-		authMatch, authCookieHost := config.matchCookieDomains(authHost)
-		if authMatch && reqCookieHost == authCookieHost {
-			return true, authCookieHost, authHost
+		if d, ok := config.authDomainOf(authHost); ok && d == domain {
+			return authHost, true
 		}
 	}
+	return "", false
+}
 
-	return
+func isPageNavigation(r *http.Request) bool {
+	return r.Method == http.MethodGet &&
+		r.Header.Get("Sec-Fetch-Mode") == "navigate" &&
+		r.Header.Get("Sec-Fetch-Dest") == "document"
 }
 
 // Cookie methods
 
-// MakeCookie creates an auth cookie
-func MakeCookie(r *http.Request, object any) (*http.Cookie, error) {
+func cookieName(name string) string {
+	if config.InsecureCookie {
+		return name
+	}
+	return hostOnlyCookiePrefix + name
+}
+
+func hostTokenCookieName() string { return cookieName(config.CookieName) }
+
+func probeCookieName() string { return cookieName(config.CookieName + "_probed") }
+
+func csrfCookieName(nonceHash string) string {
+	return cookieName(config.CSRFCookieName + "_" + nonceHash[:6])
+}
+
+// hostOnlyCookie makes a cookie without the Domain attribute, so that it is sent back only to the host that set it.
+func hostOnlyCookie(name, value string, expires time.Time) *http.Cookie {
+	return &http.Cookie{
+		Name:     name,
+		Value:    value,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   !config.InsecureCookie,
+		SameSite: http.SameSiteLaxMode,
+		Expires:  expires,
+	}
+}
+
+func expiredHostOnlyCookie(name string) *http.Cookie {
+	return hostOnlyCookie(name, "", time.Now().Add(-time.Hour))
+}
+
+// MakeCookie creates a host token cookie that authenticates user on r.Host only.
+func MakeCookie(r *http.Request, user any) (*http.Cookie, error) {
 	expires := cookieExpiry()
-	value, err := token.SignToken(object, expires.Unix(), config.secretBytes)
+	value, err := token.SignHostToken(user, hostname(r.Host), expires, config.secretBytes)
 	if err != nil {
 		return nil, err
 	}
-
-	return &http.Cookie{
-		Name:     config.CookieName,
-		Value:    value,
-		Path:     "/",
-		Domain:   cookieDomain(r.Host),
-		HttpOnly: true,
-		Secure:   !config.InsecureCookie,
-		Expires:  expires,
-	}, nil
+	return hostOnlyCookie(hostTokenCookieName(), value, expires), nil
 }
 
-// ClearCookie clears the auth cookie
-func ClearCookie(r *http.Request) *http.Cookie {
-	return &http.Cookie{
-		Name:     config.CookieName,
-		Value:    "",
-		Path:     "/",
-		Domain:   cookieDomain(r.Host),
-		HttpOnly: true,
-		Secure:   !config.InsecureCookie,
-		Expires:  time.Now().Local().Add(time.Hour * -1),
-	}
+// ClearCookie clears the host token cookie
+func ClearCookie() *http.Cookie {
+	return expiredHostOnlyCookie(hostTokenCookieName())
 }
 
-func buildCSRFCookieName(nonce string) string {
-	return config.CSRFCookieName + "_" + nonce[:6]
+// MakeProbeCookie marks that the provider has been asked whether the user is logged in,
+// so that soft-auth passes the following requests anonymously instead of asking again.
+func MakeProbeCookie() *http.Cookie {
+	return hostOnlyCookie(probeCookieName(), "1", cookieExpiry())
 }
 
-// MakeCSRFCookie makes a csrf cookie (used during login only)
-//
-// Note, CSRF cookies live shorter than auth cookies, a fixed 1h.
-// That's because some CSRF cookies may belong to auth flows that don't complete
-// and thus may not get cleared by ClearCookie.
-func MakeCSRFCookie(r *http.Request, nonce string) *http.Cookie {
-	return &http.Cookie{
-		Name:     buildCSRFCookieName(nonce),
-		Value:    nonce,
-		Path:     "/",
-		Domain:   csrfCookieDomain(r),
-		HttpOnly: true,
-		Secure:   !config.InsecureCookie,
-		Expires:  time.Now().Local().Add(time.Hour * 1),
-	}
+// ClearProbeCookie clears the mark set by MakeProbeCookie.
+func ClearProbeCookie() *http.Cookie {
+	return expiredHostOnlyCookie(probeCookieName())
+}
+
+func hasProbeCookie(r *http.Request) bool {
+	_, err := r.Cookie(probeCookieName())
+	return err == nil
+}
+
+// MakeCSRFCookie makes a nonce cookie for one login flow.
+// The cookie name contains a part of the nonce hash, so that concurrent flows (e.g. in multiple tabs) do not overwrite each other.
+func MakeCSRFCookie(nonce string) *http.Cookie {
+	return hostOnlyCookie(csrfCookieName(hashNonce(nonce)), nonce, time.Now().Add(csrfLifetime))
 }
 
 // ClearCSRFCookie makes an expired csrf cookie to clear csrf cookie
-func ClearCSRFCookie(r *http.Request, c *http.Cookie) *http.Cookie {
+func ClearCSRFCookie(c *http.Cookie) *http.Cookie {
+	return expiredHostOnlyCookie(c.Name)
+}
+
+// FindCSRFCookie returns the nonce cookie whose value hashes to nonceHash.
+func FindCSRFCookie(r *http.Request, nonceHash string) (*http.Cookie, error) {
+	if !isNonceHash(nonceHash) {
+		return nil, errors.New("invalid nonce hash")
+	}
+	for _, c := range r.CookiesNamed(csrfCookieName(nonceHash)) {
+		if subtle.ConstantTimeCompare([]byte(hashNonce(c.Value)), []byte(nonceHash)) == 1 {
+			return c, nil
+		}
+	}
+	return nil, errors.New("csrf cookie not found")
+}
+
+// findCSRFCookies returns all nonce cookies on this host, of any login flow.
+func findCSRFCookies(r *http.Request) []*http.Cookie {
+	prefix := cookieName(config.CSRFCookieName + "_")
+	var cookies []*http.Cookie
+	for _, c := range r.Cookies() {
+		if strings.HasPrefix(c.Name, prefix) {
+			cookies = append(cookies, c)
+		}
+	}
+	return cookies
+}
+
+// clearLegacyCookie returns a cookie that deletes the auth cookie of the previous format,
+// which was set on the whole auth domain, or nil if the request does not carry one.
+//
+// In insecure mode the legacy and current cookies share the name, and deleting the legacy one
+// on a host without an auth domain would also delete the current one, so nothing is deleted.
+func clearLegacyCookie(r *http.Request) *http.Cookie {
+	if config.InsecureCookie {
+		return nil
+	}
+	if _, err := r.Cookie(config.CookieName); err != nil {
+		return nil
+	}
+	// The legacy cookie was set on the host itself when the host belongs to no auth domain.
+	domain := hostname(r.Host)
+	if d, ok := config.authDomainOf(r.Host); ok {
+		domain = string(d)
+	}
 	return &http.Cookie{
-		Name:     c.Name,
+		Name:     config.CookieName,
 		Value:    "",
 		Path:     "/",
-		Domain:   csrfCookieDomain(r),
+		Domain:   domain,
 		HttpOnly: true,
-		Secure:   !config.InsecureCookie,
-		Expires:  time.Now().Local().Add(time.Hour * -1),
+		Secure:   true,
+		Expires:  time.Now().Add(-time.Hour),
 	}
 }
 
-// FindCSRFCookie extracts the CSRF cookie from the request based on state.
-func FindCSRFCookie(r *http.Request, state string) (c *http.Cookie, err error) {
-	// Check for CSRF cookie
-	return r.Cookie(buildCSRFCookieName(state))
+// State
+
+// authState is carried through the provider in the "state" parameter.
+type authState struct {
+	// Nonce is the value of the nonce cookie on the host that receives the provider's response.
+	Nonce    string
+	Provider string
+	// Probe is true when soft-auth asks the provider whether the user is logged in, without letting the user log in.
+	Probe bool
+	// AppNonceHash is the hash of the nonce cookie on the host that receives the ticket. Empty without an auth host.
+	AppNonceHash string
+	// Redirect is the URL to return to after login.
+	Redirect string
 }
 
-// ValidateCSRFCookie validates the csrf cookie against state
-func ValidateCSRFCookie(c *http.Cookie, state string) (valid bool, provider string, redirect string, err error) {
-	if len(c.Value) != 32 {
-		return false, "", "", errors.New("invalid CSRF cookie value")
+func (s authState) String() string {
+	probe := "0"
+	if s.Probe {
+		probe = "1"
 	}
-
-	// Check nonce match
-	if c.Value != state[:32] {
-		return false, "", "", errors.New("CSRF cookie does not match state")
-	}
-
-	// Extract provider
-	params := state[33:]
-	split := strings.Index(params, ":")
-	if split == -1 {
-		return false, "", "", errors.New("invalid CSRF state format")
-	}
-
-	// Valid, return provider and redirect
-	return true, params[:split], params[split+1:], nil
+	return strings.Join([]string{s.Nonce, s.Provider, probe, s.AppNonceHash, s.Redirect}, ":")
 }
 
-// MakeState generates a state value
-func MakeState(returnUrl string, p provider.Provider, nonce string) string {
-	return fmt.Sprintf("%s:%s:%s", nonce, p.Name(), returnUrl)
-}
-
-// ValidateState checks whether the state is of right length.
-func ValidateState(state string) error {
-	if len(state) < 34 {
-		return errors.New("invalid CSRF state value")
+func parseAuthState(state string) (authState, error) {
+	parts := strings.SplitN(state, ":", 5)
+	if len(parts) != 5 {
+		return authState{}, errors.New("invalid state format")
 	}
-	return nil
+	s := authState{Nonce: parts[0], Provider: parts[1], AppNonceHash: parts[3], Redirect: parts[4]}
+	if len(s.Nonce) != 32 {
+		return authState{}, errors.New("invalid state nonce")
+	}
+	switch parts[2] {
+	case "0":
+	case "1":
+		s.Probe = true
+	default:
+		return authState{}, errors.New("invalid state probe flag")
+	}
+	if s.AppNonceHash != "" && !isNonceHash(s.AppNonceHash) {
+		return authState{}, errors.New("invalid state app nonce hash")
+	}
+	if s.Redirect == "" {
+		return authState{}, errors.New("invalid state redirect")
+	}
+	return s, nil
 }
 
 // Nonce generates a random nonce
@@ -248,38 +341,38 @@ func Nonce() (error, string) {
 	return nil, fmt.Sprintf("%x", nonce)
 }
 
-// Cookie domain
-func cookieDomain(requestHost string) string {
-	_, domain := config.matchCookieDomains(requestHost)
-	return domain
+func hashNonce(nonce string) string {
+	sum := sha256.Sum256([]byte(nonce))
+	return hex.EncodeToString(sum[:])
 }
 
-// Cookie domain
-func csrfCookieDomain(r *http.Request) string {
-	var host string
-	if use, domain, _ := useAuthDomain(r); use {
-		host = domain
-	} else {
-		host = r.Host
+func isNonceHash(s string) bool {
+	if len(s) != sha256.Size*2 {
+		return false
 	}
-
-	// Remove port
-	p := strings.Split(host, ":")
-	return p[0]
+	_, err := hex.DecodeString(s)
+	return err == nil
 }
 
-// Return matching cookie domain if exists
-func (c *Config) matchCookieDomains(domain string) (bool, string) {
-	// Remove port
-	p := strings.Split(domain, ":")
-
-	for _, d := range c.CookieDomains {
-		if CookieDomainMatch(d, p[0]) {
-			return true, d
+// authDomainOf returns the auth domain that host belongs to.
+func (c *Config) authDomainOf(host string) (AuthDomain, bool) {
+	h := hostname(host)
+	for _, d := range c.AuthDomains {
+		if d.Contains(h) {
+			return d, true
 		}
 	}
+	return "", false
+}
 
-	return false, p[0]
+func (c *Config) isAuthHost(host string) bool {
+	h := hostname(host)
+	for _, authHost := range c.AuthHost {
+		if hostname(authHost) == h {
+			return true
+		}
+	}
+	return false
 }
 
 // Get cookie expiry
@@ -287,21 +380,11 @@ func cookieExpiry() time.Time {
 	return time.Now().Local().Add(config.lifetimeDuration)
 }
 
-// CookieDomain holds cookie domain info
-type CookieDomain = string
+// AuthDomain is a domain whose hosts log in via the auth host on the same domain.
+type AuthDomain string
 
-// CookieDomainMatch checks if the given host matches this CookieDomain
-func CookieDomainMatch(cd CookieDomain, host string) bool {
-	// Exact domain match?
-	if host == cd {
-		return true
-	}
-
-	// Subdomain match?
-	subDomain := fmt.Sprintf(".%s", cd)
-	if len(host) >= len(subDomain) && host[len(host)-len(subDomain):] == subDomain {
-		return true
-	}
-
-	return false
+// Contains reports whether host is the domain itself or one of its subdomains.
+// host must not include a port.
+func (d AuthDomain) Contains(host string) bool {
+	return host == string(d) || strings.HasSuffix(host, "."+string(d))
 }
