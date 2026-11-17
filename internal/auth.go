@@ -18,7 +18,8 @@ import (
 
 const (
 	authorizePathSuffix = "/authorize"
-	ticketPathSuffix    = "/ticket"
+	// ticketQueryParam carries a ticket back to the URL where the login started, on any path.
+	ticketQueryParam = "_forward_auth_ticket"
 
 	// ticketLifetime bounds how long a ticket in a redirect URL stays usable.
 	ticketLifetime = 30 * time.Second

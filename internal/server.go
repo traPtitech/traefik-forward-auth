@@ -72,15 +72,16 @@ func (s *Server) RootHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// The login flow is served before user-defined rules, so that no rule can intercept it.
+	if r.URL.Query().Has(ticketQueryParam) {
+		s.ticketHandler(w, r)
+		return
+	}
 	switch r.URL.Path {
 	case config.CallbackPath:
 		s.providerCallbackHandler(w, r)
 		return
 	case config.CallbackPath + authorizePathSuffix:
 		s.authorizeHandler(w, r)
-		return
-	case config.CallbackPath + ticketPathSuffix:
-		s.ticketHandler(w, r)
 		return
 	}
 
@@ -175,14 +176,14 @@ func (s *Server) authHandler(providerName, rule string, soft bool, authPred auth
 		if userinfo == nil {
 			switch {
 			case !soft:
-				s.startLogin(logger, w, r, p, currentUrl(r), false)
+				s.startLogin(logger, w, r, p, false)
 			case hasProbeCookie(r) || !isPageNavigation(r):
 				// A redirect can only be followed by a page navigation,
 				// and the probe mark records that the provider already answered "not logged in".
 				unauthorized(w)
 			default:
 				http.SetCookie(w, MakeProbeCookie())
-				s.startLogin(logger, w, r, p, currentUrl(r), true)
+				s.startLogin(logger, w, r, p, true)
 			}
 			return
 		}
@@ -210,11 +211,13 @@ func (s *Server) authHandler(providerName, rule string, soft bool, authPred auth
 	}
 }
 
-// startLogin redirects the user to log in and come back to returnUrl on this host.
-// With an auth host the login goes through the auth host and comes back with a ticket;
+// startLogin redirects the user to log in and come back to the URL of r.
+// With an auth host the login goes through the auth host and comes back to that URL with a ticket,
+// which this middleware receives because r itself came through it;
 // otherwise this host receives the provider's response itself.
 // probe asks the provider without letting the user log in (see authState.Probe).
-func (s *Server) startLogin(logger *logrus.Entry, w http.ResponseWriter, r *http.Request, p provider.Provider, returnUrl string, probe bool) {
+func (s *Server) startLogin(logger *logrus.Entry, w http.ResponseWriter, r *http.Request, p provider.Provider, probe bool) {
+	returnUrl := currentUrl(r)
 	if !config.InsecureCookie && r.Header.Get("X-Forwarded-Proto") != "https" {
 		logger.Warn("You are using \"secure\" cookies for a request that was not " +
 			"received via https. You should either redirect to https or pass the " +
@@ -410,12 +413,12 @@ func (s *Server) providerCallbackHandler(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "Internal server error", 500)
 		return
 	}
-	ticketURL := url.URL{
-		Scheme:   redirectURL.Scheme,
-		Host:     redirectURL.Host,
-		Path:     config.CallbackPath + ticketPathSuffix,
-		RawQuery: url.Values{"t": {signed}}.Encode(),
+	ticketURL := *redirectURL
+	ticketQuery := url.Values{ticketQueryParam: {signed}}.Encode()
+	if ticketURL.RawQuery != "" {
+		ticketQuery = ticketURL.RawQuery + "&" + ticketQuery
 	}
+	ticketURL.RawQuery = ticketQuery
 	logger.WithFields(logrus.Fields{
 		"provider": state.Provider,
 		"redirect": redirectURL.String(),
@@ -424,7 +427,7 @@ func (s *Server) providerCallbackHandler(w http.ResponseWriter, r *http.Request)
 	http.Redirect(w, r, ticketURL.String(), http.StatusTemporaryRedirect)
 }
 
-// ticketHandler exchanges a ticket from the auth host for a host token on this host.
+// ticketHandler exchanges a ticket from the auth host for a host token on this host, and redirects to the URL in the ticket.
 func (s *Server) ticketHandler(w http.ResponseWriter, r *http.Request) {
 	logger := s.logger(r, "Ticket", "default", "Handling ticket")
 
@@ -436,7 +439,7 @@ func (s *Server) ticketHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Not authorized", 401)
 	}
 
-	ticket, err := token.VerifyTicket(r.URL.Query().Get("t"), hostname(r.Host), config.secretBytes)
+	ticket, err := token.VerifyTicket(r.URL.Query().Get(ticketQueryParam), hostname(r.Host), config.secretBytes)
 	switch {
 	case errors.Is(err, token.ErrAudience):
 		reject("audience", err)
@@ -515,8 +518,10 @@ func (s *Server) LoginHandler(providerName string) http.HandlerFunc {
 			return
 		}
 
-		// Login
-		s.startLogin(logger, w, r, p, redirectURL.String(), false)
+		// Come back to this handler after logging in, rather than to redirectURL,
+		// because this path is known to pass through this middleware and redirectURL may not.
+		// This handler then redirects to redirectURL as the user is logged in.
+		s.startLogin(logger, w, r, p, false)
 	}
 }
 

@@ -40,7 +40,7 @@ type Config struct {
 	// Lifetime defines auth cookie lifetime in seconds.
 	Lifetime int `mapstructure:"lifetime"`
 	// CallbackPath defines callback URL path.
-	// "<callback-path>/authorize" and "<callback-path>/ticket" are also reserved for logging in via an auth host.
+	// "<callback-path>/authorize" is also reserved for logging in via an auth host.
 	CallbackPath string `mapstructure:"callback-path"`
 	// Secret defines secret used for signing a token (required).
 	Secret string `mapstructure:"secret"`

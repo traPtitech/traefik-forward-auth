@@ -133,8 +133,12 @@ func TestAuthHostLoginFlow(t *testing.T) {
 	initAuthHostTestConfig(t)
 
 	appNonce, ticketURL := loginFlow(t, newNavigationRequest("https://app.example.com/page?q=1"))
+	// The ticket comes back on the path where the login started, which is known to pass through this middleware,
+	// so that hosts that put the middleware only on some paths (e.g. PathPrefix(`/widget`)) can receive it.
 	assert.Equal(t, "app.example.com", ticketURL.Host)
-	assert.Equal(t, "/_oauth/ticket", ticketURL.Path)
+	assert.Equal(t, "/page", ticketURL.Path)
+	assert.Equal(t, "1", ticketURL.Query().Get("q"))
+	assert.NotEmpty(t, ticketURL.Query().Get("_forward_auth_ticket"))
 
 	t.Run("without nonce cookie", func(t *testing.T) {
 		res := doRequestWithCookies(newNavigationRequest(ticketURL.String()))
@@ -293,14 +297,37 @@ func TestSoftAuthProbe(t *testing.T) {
 	})
 }
 
+func TestExplicitLoginViaAuthHost(t *testing.T) {
+	initAuthHostTestConfig(t)
+	config.Rules["login"] = &Rule{Action: "login", RouteRule: "PathPrefix(`/_oauth/login`)", AuthRule: "True()"}
+
+	appNonce, ticketURL := loginFlow(t, newNavigationRequest("https://app.example.com/_oauth/login?redirect=%2Fafter"))
+	assert.Equal(t, "/_oauth/login", ticketURL.Path, "the ticket should come back on the login path, which passes through this middleware")
+	assert.Equal(t, "/after", ticketURL.Query().Get("redirect"))
+
+	res := doRequestWithCookies(newNavigationRequest(ticketURL.String()), appNonce)
+	require.Equal(t, 307, res.StatusCode)
+	loc, err := res.Location()
+	require.NoError(t, err)
+	assert.Equal(t, "https://app.example.com/_oauth/login?redirect=%2Fafter", loc.String())
+	hostToken := findResponseCookie(res, "__Host-_forward_auth")
+	require.NotNil(t, hostToken)
+
+	res = doRequestWithCookies(newNavigationRequest(loc.String()), hostToken)
+	require.Equal(t, 307, res.StatusCode)
+	loc, err = res.Location()
+	require.NoError(t, err)
+	assert.Equal(t, "https://app.example.com/after", loc.String())
+}
+
 func TestBuiltinPathsTakePrecedenceOverRules(t *testing.T) {
 	initAuthHostTestConfig(t)
 	config.Rules["hard"] = &Rule{Action: "auth", RouteRule: "Header(`X-Forward-Auth-Type`, `hard`)", AuthRule: "True()"}
 
-	r := newNavigationRequest("https://app.example.com/_oauth/ticket?t=invalid")
+	r := newNavigationRequest("https://app.example.com/page?_forward_auth_ticket=invalid")
 	r.Header.Set("X-Forward-Auth-Type", "hard")
 	res := doRequestWithCookies(r)
-	assert.Equal(t, 401, res.StatusCode, "ticket endpoint should be handled before user rules")
+	assert.Equal(t, 401, res.StatusCode, "ticket should be handled before user rules")
 
 	r = newNavigationRequest("https://auth.example.com/_oauth?state=invalid")
 	r.Header.Set("X-Forward-Auth-Type", "hard")

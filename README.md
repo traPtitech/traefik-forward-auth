@@ -270,8 +270,8 @@ They are parsed in the following precedence order.
 - `callback-path`
 
    Customise the path that this service uses to handle the callback following authentication.
-   `<callback-path>/authorize` (on the auth host) and `<callback-path>/ticket` (on each host) are also served by this service for [Auth Host Mode](#auth-host-mode).
-   These paths are handled before any `rules`.
+   `<callback-path>/authorize` on the auth host is also served by this service for [Auth Host Mode](#auth-host-mode).
+   These paths, and requests with the `_forward_auth_ticket` query parameter on any path, are handled before any `rules`.
 
    Default: `/_oauth`
 
@@ -484,12 +484,13 @@ The user flow will then be:
 2. User redirected to `auth.test.com/_oauth/authorize`, with a CSRF cookie set on `app10.test.com`
 3. User redirected to Google login, with a CSRF cookie set on `auth.test.com`
 4. After Google login, user is redirected to `auth.test.com/_oauth`
-5. Token, user and CSRF cookie is validated, and user is redirected to `app10.test.com/_oauth/ticket` with a ticket for `app10.test.com` valid for 30 seconds
+5. Token, user and CSRF cookie is validated, and user is redirected to `app10.test.com/home/page?_forward_auth_ticket=...` with a ticket for `app10.test.com` valid for 30 seconds
 6. Ticket and CSRF cookie is validated, auth cookie is set to `app10.test.com`
 7. User is redirected to `app10.test.com/home/page`
 8. Request is allowed
 
 With this setup, only `auth.test.com` must be permitted in the Google console.
+The ticket comes back to the URL where the login started, so it reaches this service on any path that has the forward auth middleware; the middleware does not need to cover `/_oauth` on each host.
 The auth cookie of `app10.test.com` is not accepted on any other host, so an application on one host cannot reuse the cookies it receives on another host.
 Requests from a page on one host to another host with credentials (e.g. `fetch` with `credentials: "include"`) are not authenticated by the cookie of the page's host; serve such APIs on the same host.
 
