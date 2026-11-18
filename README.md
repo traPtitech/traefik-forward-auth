@@ -272,6 +272,7 @@ They are parsed in the following precedence order.
    Customise the path that this service uses to handle the callback following authentication.
    `<callback-path>/authorize` (on the auth host) and `<callback-path>/ticket` (on each host) are also served by this service for [Auth Host Mode](#auth-host-mode).
    These paths are handled before any `rules`.
+   Every host protected by this service must route `<callback-path>` and the paths under it through the forward auth middleware; see [Routing the callback path](#routing-the-callback-path).
 
    Default: `/_oauth`
 
@@ -424,6 +425,33 @@ spec:
 
 See the examples directory for more examples.
 
+#### Routing the callback path
+
+Every host that uses the forward auth middleware must route requests to `<callback-path>` (`/_oauth` by default) and the paths under it through the middleware, even if the middleware is applied only to some paths of the host.
+The ticket of [Auth Host Mode](#auth-host-mode) is handed over at `<callback-path>/ticket` on each host, and in [Overlay Mode](#overlay-mode) the provider redirects back to `<callback-path>` itself. If such a request reaches the application instead of this service, the login does not complete, and anyone who can read the requests to the application (e.g. its access logs) can use the ticket or the authorization code to log in to the host as the user.
+The paths of the `login` and `logout` rules must be routed through the middleware as well; placing them under `<callback-path>/` (e.g. `PathPrefix(`/_oauth/login`)`) lets the same route cover them.
+
+For example, when the middleware is applied only to `/widget`, add a route for `/_oauth`:
+
+```yaml
+spec:
+  routes:
+  - match: Host(`app.example.com`) && PathPrefix(`/widget`)
+    kind: Rule
+    services:
+      - name: widget
+        port: 80
+    middlewares:
+      - name: traefik-forward-auth
+  - match: Host(`app.example.com`) && (Path(`/_oauth`) || PathPrefix(`/_oauth/`))
+    kind: Rule
+    services:
+      - name: widget
+        port: 80
+    middlewares:
+      - name: traefik-forward-auth
+```
+
 #### Selective Container Authentication in Swarm
 
 You can apply labels to selected containers:
@@ -484,7 +512,7 @@ The user flow will then be:
 2. User redirected to `auth.test.com/_oauth/authorize`, with a CSRF cookie set on `app10.test.com`
 3. User redirected to Google login, with a CSRF cookie set on `auth.test.com`
 4. After Google login, user is redirected to `auth.test.com/_oauth`
-5. Token, user and CSRF cookie is validated, and user is redirected to `app10.test.com/_oauth/ticket` with a ticket for `app10.test.com` valid for 30 seconds
+5. Token, user and CSRF cookie is validated, and user is redirected to `app10.test.com/_oauth/ticket` with a ticket for `app10.test.com` valid for 30 seconds (this path must be routed through the middleware; see [Routing the callback path](#routing-the-callback-path))
 6. Ticket and CSRF cookie is validated, auth cookie is set to `app10.test.com`
 7. User is redirected to `app10.test.com/home/page`
 8. Request is allowed
