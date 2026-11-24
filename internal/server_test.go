@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/samber/lo"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -46,6 +47,11 @@ trusted-ip-addresses:
 func TestServerRootHandler(t *testing.T) {
 	assert := assert.New(t)
 	initTestConfig()
+	server := NewServer()
+	var routed *http.Request
+	require.NoError(t, server.muxer.AddRoute("PathPrefix(`/`)", "v3", math.MaxInt, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		routed = r
+	})))
 
 	// X-Forwarded headers should be read into request
 	req := httptest.NewRequest("POST", "http://should-use-x-forwarded.com/should?ignore=me", nil)
@@ -53,12 +59,12 @@ func TestServerRootHandler(t *testing.T) {
 	req.Header.Add("X-Forwarded-Proto", "https")
 	req.Header.Add("X-Forwarded-Host", "example.com")
 	req.Header.Add("X-Forwarded-Uri", "/foo?q=bar")
-	NewServer().RootHandler(httptest.NewRecorder(), req)
+	server.RootHandler(httptest.NewRecorder(), req)
 
-	assert.Equal("GET", req.Method, "x-forwarded-method should be read into request")
-	assert.Equal("example.com", req.Host, "x-forwarded-host should be read into request")
-	assert.Equal("/foo", req.URL.Path, "x-forwarded-uri should be read into request")
-	assert.Equal("/foo?q=bar", req.URL.RequestURI(), "x-forwarded-uri should be read into request")
+	assert.Equal("GET", routed.Method, "x-forwarded-method should be read into request")
+	assert.Equal("example.com", routed.Host, "x-forwarded-host should be read into request")
+	assert.Equal("/foo", routed.URL.Path, "x-forwarded-uri should be read into request")
+	assert.Equal("/foo?q=bar", routed.URL.RequestURI(), "x-forwarded-uri should be read into request")
 
 	// Other X-Forwarded headers should be read in into request and original URL
 	// should be preserved if X-Forwarded-Uri not present
@@ -66,12 +72,36 @@ func TestServerRootHandler(t *testing.T) {
 	req.Header.Add("X-Forwarded-Method", "GET")
 	req.Header.Add("X-Forwarded-Proto", "https")
 	req.Header.Add("X-Forwarded-Host", "example.com")
-	NewServer().RootHandler(httptest.NewRecorder(), req)
+	server.RootHandler(httptest.NewRecorder(), req)
 
-	assert.Equal("GET", req.Method, "x-forwarded-method should be read into request")
-	assert.Equal("example.com", req.Host, "x-forwarded-host should be read into request")
-	assert.Equal("/should-not", req.URL.Path, "request url should be preserved if x-forwarded-uri not present")
-	assert.Equal("/should-not?ignore=me", req.URL.RequestURI(), "request url should be preserved if x-forwarded-uri not present")
+	assert.Equal("GET", routed.Method, "x-forwarded-method should be read into request")
+	assert.Equal("example.com", routed.Host, "x-forwarded-host should be read into request")
+	assert.Equal("/should-not", routed.URL.Path, "request url should be preserved if x-forwarded-uri not present")
+	assert.Equal("/should-not?ignore=me", routed.URL.RequestURI(), "request url should be preserved if x-forwarded-uri not present")
+}
+
+func TestServerRootHandlerForwardedHEAD(t *testing.T) {
+	initTestConfig()
+	server := httptest.NewServer(http.HandlerFunc(NewServer().RootHandler))
+	defer server.Close()
+
+	// Traefik forwards a HEAD as a GET with X-Forwarded-Method: HEAD.
+	req, err := http.NewRequest("GET", server.URL, nil)
+	require.NoError(t, err)
+	req.Header = newHTTPRequest("HEAD", "http://example.com/foo").Header
+	client := &http.Client{
+		Timeout: 2 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	res, err := client.Do(req)
+	require.NoError(t, err)
+	defer res.Body.Close()
+
+	_, err = io.ReadAll(res.Body)
+	require.NoError(t, err, "the response to the GET should end")
+	assert.Equal(t, 307, res.StatusCode, "forwarded request should be redirected to login")
 }
 
 func TestServerAuthHandlerInvalid(t *testing.T) {
