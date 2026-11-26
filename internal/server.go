@@ -59,6 +59,12 @@ func (s *Server) buildRoutes() {
 // RootHandler Overwrites the request method, host and URL with those from the
 // forwarded request so that it's correctly routed by mux
 func (s *Server) RootHandler(w http.ResponseWriter, r *http.Request) {
+	// Rewrite a copy: net/http in Go 1.25, 1.26.0-1.26.8 and 1.27.0-1.27.1
+	// frames the response by the method of r. Traefik sends GET even when it
+	// forwards a HEAD, so a response framed for HEAD leaves it waiting for a
+	// body until it times out.
+	r = r.Clone(r.Context())
+
 	// Modify request if we're acting as forward auth middleware
 	// https://doc.traefik.io/traefik/v3.0/middlewares/http/forwardauth/
 	if v := r.Header.Get("X-Forwarded-Method"); v != "" {
